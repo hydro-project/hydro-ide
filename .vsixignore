@@ -1,0 +1,12 @@
+# Additional files to exclude from VSIX package
+# (beyond what's in .vscodeignore)
+
+# Large test data files
+test-data/**
+*.vsix
+
+# CI/CD files
+.github/**
+
+# Development documentation
+docs/development/**

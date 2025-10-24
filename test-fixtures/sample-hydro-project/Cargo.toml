@@ -1,0 +1,13 @@
+[package]
+name = "sample-hydro-project"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dfir_rs = { path = "../../../hydro/dfir_rs" }
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+
+[features]
+# Enable visualization features for graph generation
+viz = []

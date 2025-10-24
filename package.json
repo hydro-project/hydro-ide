@@ -1,0 +1,188 @@
+{
+  "name": "hydro-ide",
+  "displayName": "Hydro IDE",
+  "description": "IDE support for Hydro dataflow programming, including visualization with Hydroscope",
+  "version": "0.1.0",
+  "publisher": "hydro-project",
+  "license": "Apache-2.0",
+  "galleryBanner": {
+    "color": "#2563eb",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hydro-project/hydro-ide"
+  },
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Visualization",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "hydro",
+    "dataflow",
+    "visualization",
+    "distributed systems",
+    "rust"
+  ],
+  "activationEvents": [
+    "onLanguage:rust"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "hydro-ide.visualizeFunction",
+        "title": "Hydro: Visualize Function",
+        "category": "Hydro"
+      },
+      {
+        "command": "hydro-ide.visualizeFile",
+        "title": "Hydro: Visualize File",
+        "category": "Hydro"
+      },
+      {
+        "command": "hydro-ide.visualizeWorkspace",
+        "title": "Hydro: Visualize Workspace",
+        "category": "Hydro"
+      },
+      {
+        "command": "hydro-ide.refresh",
+        "title": "Hydro: Refresh Visualization",
+        "category": "Hydro"
+      },
+      {
+        "command": "hydro-ide.exportJson",
+        "title": "Hydro: Export as JSON",
+        "category": "Hydro"
+      },
+      {
+        "command": "hydro-ide.exportPng",
+        "title": "Hydro: Export as PNG",
+        "category": "Hydro"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "hydro-ide.visualizeFunction",
+          "when": "editorLangId == rust",
+          "group": "hydro@1"
+        },
+        {
+          "command": "hydro-ide.visualizeFile",
+          "when": "editorLangId == rust",
+          "group": "hydro@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Hydro IDE",
+      "properties": {
+        "hydroIde.autoRefresh": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically refresh visualization when Rust files are saved"
+        },
+        "hydroIde.cargo.releaseMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Build in release mode (slower but optimized)"
+        },
+        "hydroIde.cargo.features": {
+          "type": "array",
+          "default": [],
+          "description": "Additional Cargo features to enable",
+          "items": {
+            "type": "string"
+          }
+        },
+        "hydroIde.cargo.timeout": {
+          "type": "number",
+          "default": 120000,
+          "description": "Cargo build timeout in milliseconds"
+        },
+        "hydroIde.graph.showMetadata": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show node metadata in Hydroscope visualization"
+        },
+        "hydroIde.graph.showLocationGroups": {
+          "type": "boolean",
+          "default": true,
+          "description": "Group nodes by location in Hydroscope visualization"
+        },
+        "hydroIde.graph.useShortLabels": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use shortened labels for nodes in Hydroscope visualization"
+        },
+        "hydroIde.performance.largeGraphThreshold": {
+          "type": "number",
+          "default": 500,
+          "description": "Node count threshold for large graph warning"
+        },
+        "hydroIde.performance.warnOnLargeGraphs": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show warning when visualizing large graphs"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run clean && npm run build:production",
+    "build": "webpack --mode development",
+    "build:production": "NODE_ENV=production webpack --mode production",
+    "watch": "webpack --mode development --watch",
+    "compile": "tsc -p ./",
+    "clean": "rm -rf dist/ out/ *.vsix",
+    "lint": "eslint src --ext ts",
+    "lint:fix": "eslint src --ext ts --fix",
+    "format": "prettier --write \"src/**/*.ts\" \"webview/**/*.{ts,tsx}\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"webview/**/*.{ts,tsx}\"",
+    "typecheck": "tsc --noEmit",
+    "prepackage": "npm run lint && npm run typecheck && npm run clean && npm run build:production",
+    "package": "vsce package",
+    "package:pre-release": "vsce package --pre-release",
+    "verify-vsix": "./scripts/verify-vsix.sh",
+    "pretest": "npm run compile",
+    "test": "node ./out/test/runTest.js",
+    "test:unit": "npm run compile && node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/glob": "^8.1.0",
+    "@types/mocha": "^10.0.1",
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@types/vscode": "^1.80.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "@vscode/test-electron": "^2.3.0",
+    "@vscode/vsce": "^2.19.0",
+    "css-loader": "^6.8.0",
+    "eslint": "^8.45.0",
+    "eslint-config-prettier": "^9.0.0",
+    "glob": "^10.3.0",
+    "mocha": "^10.2.0",
+    "prettier": "^3.0.0",
+    "process": "^0.11.10",
+    "style-loader": "^3.3.0",
+    "terser-webpack-plugin": "^5.3.0",
+    "ts-loader": "^9.4.0",
+    "typescript": "^5.1.0",
+    "webpack": "^5.88.0",
+    "webpack-cli": "^5.1.0"
+  },
+  "dependencies": {
+    "html2canvas": "^1.4.1",
+    "hydroscope": "file:../hydroscope",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "tree-sitter": "^0.22.4",
+    "tree-sitter-rust": "^0.24.0"
+  }
+}

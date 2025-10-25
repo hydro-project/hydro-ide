@@ -62,6 +62,21 @@
         "command": "hydro-ide.exportPng",
         "title": "Hydro: Export as PNG",
         "category": "Hydro"
+      },
+      {
+        "command": "hydro-ide.colorizeLocations",
+        "title": "Hydro: Colorize Location Types",
+        "category": "Hydro"
+      },
+      {
+        "command": "hydro-ide.clearColorizations",
+        "title": "Hydro: Clear Location Colorizations",
+        "category": "Hydro"
+      },
+      {
+        "command": "hydro-ide.clearTypeCache",
+        "title": "Hydro: Clear Type Cache",
+        "category": "Hydro"
       }
     ],
     "menus": {
@@ -75,6 +90,16 @@
           "command": "hydro-ide.visualizeFile",
           "when": "editorLangId == rust",
           "group": "hydro@2"
+        },
+        {
+          "command": "hydro-ide.colorizeLocations",
+          "when": "editorLangId == rust",
+          "group": "hydro@3"
+        },
+        {
+          "command": "hydro-ide.clearColorizations",
+          "when": "editorLangId == rust",
+          "group": "hydro@4"
         }
       ]
     },
@@ -85,6 +110,11 @@
           "type": "boolean",
           "default": false,
           "description": "Automatically refresh visualization when Rust files are saved"
+        },
+        "hydroIde.locationColoring.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically colorize Hydro location types (Process, Cluster, External) in Rust files"
         },
         "hydroIde.cargo.releaseMode": {
           "type": "boolean",
@@ -144,7 +174,7 @@
     "format": "prettier --write \"src/**/*.ts\" \"webview/**/*.{ts,tsx}\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"webview/**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit",
-    "prepackage": "npm run lint && npm run typecheck && npm run clean && npm run build:production",
+    "prepackage": "npm run lint && npm run typecheck",
     "package": "vsce package",
     "package:pre-release": "vsce package --pre-release",
     "verify-vsix": "./scripts/verify-vsix.sh",

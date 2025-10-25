@@ -1,0 +1,217 @@
+/**
+ * Location Colorizer
+ *
+ * Applies color decorations to Hydro operators based on their Location type.
+ */
+
+import * as vscode from 'vscode';
+import * as locationAnalyzer from './locationAnalyzer';
+
+/**
+ * Output channel for logging
+ */
+let outputChannel: vscode.OutputChannel | null = null;
+
+/**
+ * Color palette for different location instances
+ * Using ColorBrewer Set2 palette for maximum distinction
+ */
+const COLOR_PALETTE = [
+  'rgba(102, 194, 165, 0.20)', // teal
+  'rgba(252, 141, 98, 0.20)', // coral
+  'rgba(141, 160, 203, 0.20)', // lavender
+  'rgba(231, 138, 195, 0.20)', // pink
+  'rgba(166, 216, 84, 0.20)', // lime
+  'rgba(255, 217, 47, 0.20)', // yellow
+  'rgba(229, 196, 148, 0.20)', // tan
+  'rgba(179, 179, 179, 0.20)', // gray
+];
+
+/**
+ * Get border style based on location kind (Process, Cluster, External)
+ */
+function getBorderStyle(locationKind: string): {
+  borderRadius: string;
+  border?: string;
+  outline?: string;
+} {
+  if (locationKind.startsWith('Process')) {
+    // Process: no border, just background
+    return {
+      borderRadius: '3px',
+    };
+  } else if (locationKind.startsWith('Cluster')) {
+    // Cluster: double border (darker)
+    return {
+      borderRadius: '3px',
+      border: '2px double rgba(0, 0, 0, 0.4)',
+    };
+  } else if (locationKind.startsWith('External')) {
+    // External: single border (darker)
+    return {
+      borderRadius: '3px',
+      border: '1px solid rgba(0, 0, 0, 0.4)',
+    };
+  }
+  return {
+    borderRadius: '3px',
+  };
+}
+
+/**
+ * Decoration types mapped by full location type (e.g., "Process<Leader>")
+ */
+const decorationTypesByLocation = new Map<string, vscode.TextEditorDecorationType>();
+
+/**
+ * Initialize decoration types and output channel
+ */
+export function initializeDecorationTypes(channel?: vscode.OutputChannel): void {
+  // Set output channel if provided
+  if (channel) {
+    outputChannel = channel;
+    locationAnalyzer.initialize(channel);
+  }
+
+  // Clear existing decorations
+  decorationTypesByLocation.forEach((d) => d.dispose());
+  decorationTypesByLocation.clear();
+}
+
+/**
+ * Get or create a decoration type for a specific location
+ */
+function getDecorationForLocation(
+  locationKind: string,
+  colorIndex: number
+): vscode.TextEditorDecorationType {
+  if (!decorationTypesByLocation.has(locationKind)) {
+    const borderStyle = getBorderStyle(locationKind);
+    const decorationType = vscode.window.createTextEditorDecorationType({
+      backgroundColor: COLOR_PALETTE[colorIndex % COLOR_PALETTE.length],
+      ...borderStyle,
+    });
+    decorationTypesByLocation.set(locationKind, decorationType);
+  }
+  return decorationTypesByLocation.get(locationKind)!;
+}
+
+/**
+ * Log message to output channel
+ */
+function log(message: string): void {
+  if (outputChannel) {
+    outputChannel.appendLine(`[LocationColorizer] ${message}`);
+  }
+}
+
+/**
+ * Apply decorations to the editor
+ */
+function applyDecorations(
+  editor: vscode.TextEditor,
+  locationInfos: locationAnalyzer.LocationInfo[]
+): void {
+  // Clear existing decorations
+  decorationTypesByLocation.forEach((d) => editor.setDecorations(d, []));
+
+  // Group ranges by location kind and assign colors
+  const rangesByLocation = new Map<string, vscode.Range[]>();
+  const locationToColorIndex = new Map<string, number>();
+  let nextColorIndex = 0;
+
+  for (const info of locationInfos) {
+    if (!rangesByLocation.has(info.locationKind)) {
+      rangesByLocation.set(info.locationKind, []);
+      locationToColorIndex.set(info.locationKind, nextColorIndex++);
+    }
+    rangesByLocation.get(info.locationKind)!.push(info.range);
+  }
+
+  // Apply decorations for each location kind with its assigned color
+  rangesByLocation.forEach((ranges, locationKind) => {
+    const colorIndex = locationToColorIndex.get(locationKind)!;
+    const decorationType = getDecorationForLocation(locationKind, colorIndex);
+    editor.setDecorations(decorationType, ranges);
+  });
+}
+
+/**
+ * Colorize all Hydro operators in the entire file by their Location type
+ */
+export async function colorizeFile(editor: vscode.TextEditor): Promise<void> {
+  const document = editor.document;
+
+  // Show status immediately
+  vscode.window.setStatusBarMessage('$(sync~spin) Colorizing locations...', 10000);
+
+  try {
+    // Don't show output channel - user can open it manually if needed
+    
+    log(`========================================`);
+    log(`Colorizing file: ${document.fileName}`);
+
+    // Analyze the document to find all Location-typed identifiers
+    const locationInfos = await locationAnalyzer.analyzeDocument(document);
+
+    if (locationInfos.length === 0) {
+      log('No Hydro operators with Location types found.');
+      log(`========================================`);
+      return;
+    }
+
+    // Apply decorations
+    applyDecorations(editor, locationInfos);
+
+    // Show summary
+    const locationCounts = new Map<string, number>();
+    locationInfos.forEach((info) => {
+      locationCounts.set(info.locationKind, (locationCounts.get(info.locationKind) || 0) + 1);
+    });
+
+    const summary = Array.from(locationCounts.entries())
+      .map(([loc, count]) => `${loc}: ${count}`)
+      .join(', ');
+
+    log(`Colorized ${locationInfos.length} identifiers: ${summary}`);
+    log(`========================================`);
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    log(`ERROR during colorization: ${errorMsg}`);
+    if (error instanceof Error && error.stack) {
+      log(`Stack trace: ${error.stack}`);
+    }
+    log(`========================================`);
+  }
+}
+
+/**
+ * Clear all location colorizations
+ */
+export function clearColorizations(editor: vscode.TextEditor): void {
+  decorationTypesByLocation.forEach((d) => editor.setDecorations(d, []));
+}
+
+/**
+ * Clear the type cache (useful when rust-analyzer reanalyzes)
+ * Optionally clear cache for a specific file only
+ */
+export function clearCache(fileUri?: string): void {
+  locationAnalyzer.clearCache(fileUri);
+}
+
+/**
+ * Get cache statistics for debugging
+ */
+export function getCacheStats() {
+  return locationAnalyzer.getCacheStats();
+}
+
+/**
+ * Dispose all decoration types
+ */
+export function dispose(): void {
+  decorationTypesByLocation.forEach((d) => d.dispose());
+  decorationTypesByLocation.clear();
+  locationAnalyzer.clearCache();
+}

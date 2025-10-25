@@ -57,7 +57,7 @@ suite('LocationColorizer Integration Tests', () => {
     const isReady = await waitForRustAnalyzer(document);
     
     if (!isReady) {
-      console.log('rust-analyzer not ready, skipping test');
+      // rust-analyzer not ready, skipping test
       this.skip();
       return;
     }
@@ -90,7 +90,7 @@ suite('LocationColorizer Integration Tests', () => {
     const isReady = await waitForRustAnalyzer(document);
     
     if (!isReady) {
-      console.log('rust-analyzer not ready, skipping test');
+      // rust-analyzer not ready, skipping test
       this.skip();
       return;
     }

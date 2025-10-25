@@ -198,28 +198,40 @@ describe('LocationAnalyzer Type Parsing', () => {
 describe('LocationAnalyzer Border Styles', () => {
   test('Process should have no border', () => {
     const style = getBorderStyle('Process<Leader>');
-    expect(style.border).toBe(undefined);
+    expect(style.border).toBeUndefined();
     expect(style.borderRadius).toBe('3px');
   });
 
-  test('Cluster should have double border', () => {
-    const style = getBorderStyle('Cluster<Worker>');
+  test('Cluster should have double border in light mode', () => {
+    const style = getBorderStyle('Cluster<Worker>', false);
     expect(style.border).toBe('2px double rgba(0, 0, 0, 0.4)');
     expect(style.borderRadius).toBe('3px');
   });
 
-  test('External should have single border', () => {
-    const style = getBorderStyle('External<Client>');
+  test('Cluster should have double border in dark mode', () => {
+    const style = getBorderStyle('Cluster<Worker>', true);
+    expect(style.border).toBe('2px double rgba(200, 200, 200, 0.4)');
+    expect(style.borderRadius).toBe('3px');
+  });
+
+  test('External should have single border in light mode', () => {
+    const style = getBorderStyle('External<Client>', false);
     expect(style.border).toBe('1px solid rgba(0, 0, 0, 0.4)');
+    expect(style.borderRadius).toBe('3px');
+  });
+
+  test('External should have single border in dark mode', () => {
+    const style = getBorderStyle('External<Client>', true);
+    expect(style.border).toBe('1px solid rgba(200, 200, 200, 0.4)');
     expect(style.borderRadius).toBe('3px');
   });
 
   test('Tick<Process> should have no border', () => {
     const style = getBorderStyle('Tick<Process<Leader>>');
-    expect(style.border).toBe(undefined);
+    expect(style.border).toBeUndefined();
   });
 
-  test('Tick<Cluster> should have double border', () => {
+  test('Tick<Cluster> should have no border', () => {
     const style = getBorderStyle('Tick<Cluster<Worker>>');
     // getBorderStyle checks if string starts with "Cluster", but "Tick<Cluster>" starts with "Tick"
     // So Tick-wrapped types don't get the inner type's border style

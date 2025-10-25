@@ -243,6 +243,23 @@ function registerLocationColorizationCommands(context: vscode.ExtensionContext) 
     })
   );
 
+  // Re-colorize when theme changes (to update colors for new theme)
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveColorTheme(() => {
+      const editor = vscode.window.activeTextEditor;
+      if (editor && editor.document.languageId === 'rust') {
+        const config = vscode.workspace.getConfiguration('hydroIde');
+        const coloringEnabled = config.get<boolean>('locationColoring.enabled', true);
+        
+        if (coloringEnabled) {
+          // Clear old decorations and re-colorize with new theme colors
+          locationColorizer.clearCache();
+          autoColorizeIfReady(editor);
+        }
+      }
+    })
+  );
+
   // Clear cache when rust-analyzer restarts or file is saved
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((document) => {

@@ -9,6 +9,14 @@ import * as locationAnalyzer from './locationAnalyzer';
 import { getBorderStyle, getColorByIndex } from './locationColorizerConfig';
 
 /**
+ * Check if the current theme is dark
+ */
+function isDarkTheme(): boolean {
+  const theme = vscode.window.activeColorTheme;
+  return theme.kind === vscode.ColorThemeKind.Dark || theme.kind === vscode.ColorThemeKind.HighContrast;
+}
+
+/**
  * Output channel for logging
  */
 let outputChannel: vscode.OutputChannel | null = null;
@@ -35,15 +43,17 @@ export function initializeDecorationTypes(channel?: vscode.OutputChannel): void 
 
 /**
  * Get or create a decoration type for a specific location
+ * Theme-aware: uses appropriate colors and borders for light/dark themes
  */
 function getDecorationForLocation(
   locationKind: string,
   colorIndex: number
 ): vscode.TextEditorDecorationType {
   if (!decorationTypesByLocation.has(locationKind)) {
-    const borderStyle = getBorderStyle(locationKind);
+    const isDark = isDarkTheme();
+    const borderStyle = getBorderStyle(locationKind, isDark);
     const decorationType = vscode.window.createTextEditorDecorationType({
-      backgroundColor: getColorByIndex(colorIndex),
+      backgroundColor: getColorByIndex(colorIndex, isDark),
       ...borderStyle,
     });
     decorationTypesByLocation.set(locationKind, decorationType);
@@ -145,6 +155,14 @@ export async function colorizeFile(editor: vscode.TextEditor): Promise<void> {
  */
 export function clearColorizations(editor: vscode.TextEditor): void {
   decorationTypesByLocation.forEach((d) => editor.setDecorations(d, []));
+}
+
+/**
+ * Clear all decoration types (useful when theme changes)
+ */
+export function clearDecorationTypes(): void {
+  decorationTypesByLocation.forEach((d) => d.dispose());
+  decorationTypesByLocation.clear();
 }
 
 /**

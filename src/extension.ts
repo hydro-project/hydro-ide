@@ -147,13 +147,17 @@ async function autoColorizeIfReady(editor: vscode.TextEditor) {
   const coloringEnabled = config.get<boolean>('locationColoring.enabled', true);
   
   if (!coloringEnabled) {
+    outputChannel.appendLine('[AutoColorize] Location coloring is disabled');
     return;
   }
 
   const rustAnalyzerActive = await isRustAnalyzerActive();
   if (!rustAnalyzerActive) {
+    outputChannel.appendLine('[AutoColorize] rust-analyzer is not active');
     return;
   }
+
+  outputChannel.appendLine(`[AutoColorize] Waiting for semantic tokens for ${editor.document.fileName}`);
 
   // Wait for rust-analyzer to have semantic tokens ready
   // Try up to 10 times with 500ms delays (5 seconds total)
@@ -162,6 +166,7 @@ async function autoColorizeIfReady(editor: vscode.TextEditor) {
     
     const hasTokens = await hasSemanticTokens(editor.document);
     if (hasTokens) {
+      outputChannel.appendLine(`[AutoColorize] Semantic tokens ready after ${(attempt + 1) * 500}ms, colorizing...`);
       // Wait one more second to be safe, then colorize
       setTimeout(() => {
         locationColorizer.colorizeFile(editor);
@@ -171,7 +176,7 @@ async function autoColorizeIfReady(editor: vscode.TextEditor) {
   }
   
   // If we get here, rust-analyzer didn't provide tokens in time
-  // Don't colorize automatically - user can trigger manually
+  outputChannel.appendLine('[AutoColorize] Timeout waiting for semantic tokens - use manual colorize command');
 }
 
 /**

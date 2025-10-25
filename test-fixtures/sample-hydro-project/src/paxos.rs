@@ -12,7 +12,15 @@ use hydro_std::request_response::join_responses;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use super::paxos_with_client::PaxosLike;
+// use super::paxos_with_client::PaxosLike; // Commented out - not available in test fixture
+
+// Placeholder trait for testing
+pub trait PaxosLike<'a> {
+    type PaxosIn;
+    type PaxosLog;
+    type PaxosOut;
+    type Ballot;
+}
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Proposer {}

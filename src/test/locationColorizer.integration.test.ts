@@ -15,7 +15,7 @@ suite('LocationColorizer Integration Tests', () => {
   let testDataDir: string;
 
   suiteSetup(() => {
-    testDataDir = path.join(__dirname, '../../test-fixtures/colorizer-test-data');
+    testDataDir = path.join(__dirname, '../../test-fixtures/sample-hydro-project/src');
   });
 
   /**

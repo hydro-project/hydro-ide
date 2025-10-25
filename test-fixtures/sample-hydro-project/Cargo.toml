@@ -5,6 +5,9 @@ edition = "2021"
 
 [dependencies]
 dfir_rs = { path = "../../../hydro/dfir_rs" }
+hydro_lang = { path = "../../../hydro/hydro_lang" }
+hydro_std = { path = "../../../hydro/hydro_std" }
+stageleft = "0.4"
 tokio = { version = "1.0", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 

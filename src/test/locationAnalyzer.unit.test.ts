@@ -12,6 +12,45 @@ import { COLOR_PALETTE, getBorderStyle, getColorByIndex } from '../locationColor
  */
 describe('LocationAnalyzer Type Parsing', () => {
   /**
+   * Parse type parameters from a comma-separated list, respecting nested angle brackets and parentheses
+   */
+  function parseTypeParameters(params: string): string[] {
+    const result: string[] = [];
+    let current = '';
+    let angleDepth = 0;
+    let parenDepth = 0;
+
+    for (let i = 0; i < params.length; i++) {
+      const char = params[i];
+
+      if (char === '<') {
+        angleDepth++;
+        current += char;
+      } else if (char === '>') {
+        angleDepth--;
+        current += char;
+      } else if (char === '(') {
+        parenDepth++;
+        current += char;
+      } else if (char === ')') {
+        parenDepth--;
+        current += char;
+      } else if (char === ',' && angleDepth === 0 && parenDepth === 0) {
+        result.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+
+    if (current.trim()) {
+      result.push(current.trim());
+    }
+
+    return result;
+  }
+
+  /**
    * Parse Location type from a full type string
    * This is the same logic as in locationAnalyzer.ts
    */
@@ -20,6 +59,23 @@ describe('LocationAnalyzer Type Parsing', () => {
 
     // Remove leading & or &mut
     unwrapped = unwrapped.replace(/^&(?:mut\s+)?/, '');
+
+    // For Stream/KeyedStream/Optional/Singleton/KeyedSingleton types, extract the location parameter
+    const collectionMatch = unwrapped.match(/^(Stream|KeyedStream|Optional|Singleton|KeyedSingleton)<(.+)>$/);
+    if (collectionMatch) {
+      const params = collectionMatch[2];
+      const typeParams = parseTypeParameters(params);
+
+      // For Stream, Optional, Singleton: location is 2nd parameter (index 1)
+      // For KeyedStream, KeyedSingleton: location is 3rd parameter (index 2)
+      const locationIndex = collectionMatch[1].startsWith('Keyed') ? 2 : 1;
+
+      if (typeParams.length > locationIndex) {
+        const locationParam = typeParams[locationIndex].trim();
+        // Recursively parse the location parameter
+        return parseLocationType(locationParam);
+      }
+    }
 
     // Count and strip Tick wrappers, preserving them for later
     const tickWrappers: string[] = [];
@@ -480,5 +536,495 @@ describe('LocationAnalyzer Edge Cases', () => {
     const longType = "Stream<(usize, Option<P>), Cluster<'a, Proposer>, Unbounded, NoOrder>";
     const result = parseLocationType(longType);
     expect(result).toBe('Cluster<Proposer>');
+  });
+});
+
+/**
+ * Test Stream type parameter extraction (Issue: Tick handling)
+ */
+describe('LocationAnalyzer Stream Type Parameter Extraction', () => {
+  function parseTypeParameters(params: string): string[] {
+    const result: string[] = [];
+    let current = '';
+    let angleDepth = 0;
+    let parenDepth = 0;
+
+    for (let i = 0; i < params.length; i++) {
+      const char = params[i];
+
+      if (char === '<') {
+        angleDepth++;
+        current += char;
+      } else if (char === '>') {
+        angleDepth--;
+        current += char;
+      } else if (char === '(') {
+        parenDepth++;
+        current += char;
+      } else if (char === ')') {
+        parenDepth--;
+        current += char;
+      } else if (char === ',' && angleDepth === 0 && parenDepth === 0) {
+        result.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+
+    if (current.trim()) {
+      result.push(current.trim());
+    }
+
+    return result;
+  }
+
+  function parseLocationType(fullType: string): string | null {
+    let unwrapped = fullType;
+    unwrapped = unwrapped.replace(/^&(?:mut\s+)?/, '');
+
+    const collectionMatch = unwrapped.match(/^(Stream|KeyedStream|Optional|Singleton|KeyedSingleton)<(.+)>$/);
+    if (collectionMatch) {
+      const params = collectionMatch[2];
+      const typeParams = parseTypeParameters(params);
+      const locationIndex = collectionMatch[1].startsWith('Keyed') ? 2 : 1;
+
+      if (typeParams.length > locationIndex) {
+        const locationParam = typeParams[locationIndex].trim();
+        return parseLocationType(locationParam);
+      }
+    }
+
+    const tickWrappers: string[] = [];
+    let current = unwrapped;
+    let tickMatch = current.match(/^Tick<(.+)>$/);
+
+    while (tickMatch) {
+      tickWrappers.push('Tick');
+      current = tickMatch[1];
+      tickMatch = current.match(/^Tick<(.+)>$/);
+    }
+
+    const locationMatch = current.match(/(Process|Cluster|External)<'[^,>]+,\s*([^>,]+)>/);
+    if (locationMatch) {
+      const locationKind = locationMatch[1];
+      const typeParam = locationMatch[2].trim();
+      let result = `${locationKind}<${typeParam}>`;
+
+      for (let i = tickWrappers.length - 1; i >= 0; i--) {
+        result = `Tick<${result}>`;
+      }
+
+      return result;
+    }
+
+    const simpleMatch = current.match(/(Process|Cluster|External)</);
+    if (simpleMatch) {
+      let result = simpleMatch[1];
+
+      for (let i = tickWrappers.length - 1; i >= 0; i--) {
+        result = `Tick<${result}>`;
+      }
+
+      return result;
+    }
+
+    return null;
+  }
+
+  test('Should parse type parameters from simple list', () => {
+    const params = 'T, L, B';
+    const result = parseTypeParameters(params);
+    expect(result).toEqual(['T', 'L', 'B']);
+  });
+
+  test('Should parse type parameters with nested angle brackets', () => {
+    const params = "T, Process<'a, Leader>, Unbounded";
+    const result = parseTypeParameters(params);
+    expect(result).toEqual(['T', "Process<'a, Leader>", 'Unbounded']);
+  });
+
+  test('Should parse type parameters with deeply nested types', () => {
+    const params = "(String, i32), Tick<Process<'a, Leader>>, Bounded::UnderlyingBound, NoOrder, ExactlyOnce";
+    const result = parseTypeParameters(params);
+    expect(result).toEqual([
+      '(String, i32)',
+      "Tick<Process<'a, Leader>>",
+      'Bounded::UnderlyingBound',
+      'NoOrder',
+      'ExactlyOnce',
+    ]);
+  });
+
+  test('Should extract Tick<Process> from Stream with Bounded::UnderlyingBound', () => {
+    const fullType =
+      "Stream<(String, i32), Tick<Process<'a, Leader>>, Bounded::UnderlyingBound, NoOrder, ExactlyOnce>";
+    const result = parseLocationType(fullType);
+    expect(result).toBe('Tick<Process<Leader>>');
+  });
+
+  test('Should extract Tick<Cluster> from Stream with Bounded::UnderlyingBound', () => {
+    const fullType =
+      "Stream<(String, i32), Tick<Cluster<'a, Worker>>, Bounded::UnderlyingBound, NoOrder, ExactlyOnce>";
+    const result = parseLocationType(fullType);
+    expect(result).toBe('Tick<Cluster<Worker>>');
+  });
+
+  test('Should extract Process from Stream without Tick', () => {
+    const fullType = "Stream<(String, i32), Process<'a, Leader>, Unbounded, NoOrder, ExactlyOnce>";
+    const result = parseLocationType(fullType);
+    expect(result).toBe('Process<Leader>');
+  });
+
+  test('Should extract location from KeyedStream with Tick', () => {
+    const fullType =
+      "KeyedStream<String, i32, Tick<Process<'a, Leader>>, Bounded, TotalOrder, ExactlyOnce>";
+    const result = parseLocationType(fullType);
+    expect(result).toBe('Tick<Process<Leader>>');
+  });
+
+  test('Should extract location from KeyedSingleton with Tick', () => {
+    const fullType = "KeyedSingleton<String, i32, Tick<Process<'a, Leader>>, Bounded>";
+    const result = parseLocationType(fullType);
+    expect(result).toBe('Tick<Process<Leader>>');
+  });
+
+  test('Should extract location from Optional with Tick', () => {
+    const fullType = "Optional<(), Tick<Cluster<'a, Proposer>>, Bounded>";
+    const result = parseLocationType(fullType);
+    expect(result).toBe('Tick<Cluster<Proposer>>');
+  });
+
+  test('Should extract location from Singleton with Tick', () => {
+    const fullType = "Singleton<i32, Tick<Process<'a, Leader>>, Bounded>";
+    const result = parseLocationType(fullType);
+    expect(result).toBe('Tick<Process<Leader>>');
+  });
+
+  test('Should handle Stream with complex tuple type', () => {
+    const fullType =
+      "Stream<(Ballot, Result<(Option<usize>, L), Ballot>), Tick<Cluster<'a, Proposer>>, Unbounded, NoOrder>";
+    const result = parseLocationType(fullType);
+    expect(result).toBe('Tick<Cluster<Proposer>>');
+  });
+
+  test('Should handle KeyedStream with MemberId key type', () => {
+    const fullType =
+      "KeyedStream<MemberId<Worker>, (String, i32), Process<'a, Leader>, Unbounded, NoOrder, ExactlyOnce>";
+    const result = parseLocationType(fullType);
+    expect(result).toBe('Process<Leader>');
+  });
+
+  test('Should handle nested Tick in Stream', () => {
+    const fullType = "Stream<T, Tick<Tick<Process<'a, Leader>>>, Unbounded>";
+    const result = parseLocationType(fullType);
+    expect(result).toBe('Tick<Tick<Process<Leader>>>');
+  });
+
+  test('Should handle KeyedSingleton with WhenValueUnbounded bound', () => {
+    const fullType = "KeyedSingleton<String, i32, Tick<Cluster<'a, Worker>>, Bounded::WhenValueUnbounded>";
+    const result = parseLocationType(fullType);
+    expect(result).toBe('Tick<Cluster<Worker>>');
+  });
+});
+
+/**
+ * Test real-world map_reduce.rs scenarios
+ */
+describe('LocationAnalyzer Map-Reduce Tick Scenarios', () => {
+  function parseTypeParameters(params: string): string[] {
+    const result: string[] = [];
+    let current = '';
+    let angleDepth = 0;
+    let parenDepth = 0;
+
+    for (let i = 0; i < params.length; i++) {
+      const char = params[i];
+
+      if (char === '<') {
+        angleDepth++;
+        current += char;
+      } else if (char === '>') {
+        angleDepth--;
+        current += char;
+      } else if (char === '(') {
+        parenDepth++;
+        current += char;
+      } else if (char === ')') {
+        parenDepth--;
+        current += char;
+      } else if (char === ',' && angleDepth === 0 && parenDepth === 0) {
+        result.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+
+    if (current.trim()) {
+      result.push(current.trim());
+    }
+
+    return result;
+  }
+
+  function parseLocationType(fullType: string): string | null {
+    let unwrapped = fullType;
+    unwrapped = unwrapped.replace(/^&(?:mut\s+)?/, '');
+
+    const collectionMatch = unwrapped.match(/^(Stream|KeyedStream|Optional|Singleton|KeyedSingleton)<(.+)>$/);
+    if (collectionMatch) {
+      const params = collectionMatch[2];
+      const typeParams = parseTypeParameters(params);
+      const locationIndex = collectionMatch[1].startsWith('Keyed') ? 2 : 1;
+
+      if (typeParams.length > locationIndex) {
+        const locationParam = typeParams[locationIndex].trim();
+        return parseLocationType(locationParam);
+      }
+    }
+
+    const tickWrappers: string[] = [];
+    let current = unwrapped;
+    let tickMatch = current.match(/^Tick<(.+)>$/);
+
+    while (tickMatch) {
+      tickWrappers.push('Tick');
+      current = tickMatch[1];
+      tickMatch = current.match(/^Tick<(.+)>$/);
+    }
+
+    const locationMatch = current.match(/(Process|Cluster|External)<'[^,>]+,\s*([^>,]+)>/);
+    if (locationMatch) {
+      const locationKind = locationMatch[1];
+      const typeParam = locationMatch[2].trim();
+      let result = `${locationKind}<${typeParam}>`;
+
+      for (let i = tickWrappers.length - 1; i >= 0; i--) {
+        result = `Tick<${result}>`;
+      }
+
+      return result;
+    }
+
+    const simpleMatch = current.match(/(Process|Cluster|External)</);
+    if (simpleMatch) {
+      let result = simpleMatch[1];
+
+      for (let i = tickWrappers.length - 1; i >= 0; i--) {
+        result = `Tick<${result}>`;
+      }
+
+      return result;
+    }
+
+    return null;
+  }
+
+  test('cluster.tick() should return Tick<Cluster<Worker>>', () => {
+    const tickType = "Tick<Cluster<'a, Worker>>";
+    const result = parseLocationType(tickType);
+    expect(result).toBe('Tick<Cluster<Worker>>');
+  });
+
+  test('batch() with cluster.tick() should return KeyedStream with Tick<Cluster<Worker>>', () => {
+    const batchType = "KeyedStream<String, (), Tick<Cluster<'a, Worker>>, Bounded, TotalOrder, ExactlyOnce>";
+    const result = parseLocationType(batchType);
+    expect(result).toBe('Tick<Cluster<Worker>>');
+  });
+
+  test('fold() on batched stream should return KeyedSingleton with Tick<Cluster<Worker>>', () => {
+    const foldType = "KeyedSingleton<String, i32, Tick<Cluster<'a, Worker>>, Bounded::WhenValueUnbounded>";
+    const result = parseLocationType(foldType);
+    expect(result).toBe('Tick<Cluster<Worker>>');
+  });
+
+  test('entries() after fold() should preserve Tick<Cluster<Worker>>', () => {
+    const entriesType =
+      "Stream<(String, i32), Tick<Cluster<'a, Worker>>, Bounded::UnderlyingBound, NoOrder, ExactlyOnce>";
+    const result = parseLocationType(entriesType);
+    expect(result).toBe('Tick<Cluster<Worker>>');
+  });
+
+  test('process.tick() should return Tick<Process<Leader>>', () => {
+    const tickType = "Tick<Process<'a, Leader>>";
+    const result = parseLocationType(tickType);
+    expect(result).toBe('Tick<Process<Leader>>');
+  });
+
+  test('snapshot() with process.tick() should return KeyedSingleton with Tick<Process<Leader>>', () => {
+    const snapshotType = "KeyedSingleton<String, i32, Tick<Process<'a, Leader>>, Bounded>";
+    const result = parseLocationType(snapshotType);
+    expect(result).toBe('Tick<Process<Leader>>');
+  });
+
+  test('entries() after snapshot() should preserve Tick<Process<Leader>>', () => {
+    const entriesType =
+      "Stream<(String, i32), Tick<Process<'a, Leader>>, Bounded::UnderlyingBound, NoOrder, ExactlyOnce>";
+    const result = parseLocationType(entriesType);
+    expect(result).toBe('Tick<Process<Leader>>');
+  });
+
+  test('all_ticks() should unwrap Tick and return base location', () => {
+    const allTicksType = "Stream<(String, i32), Cluster<'a, Worker>, Unbounded, NoOrder, ExactlyOnce>";
+    const result = parseLocationType(allTicksType);
+    expect(result).toBe('Cluster<Worker>');
+  });
+});
+
+/**
+ * Regression tests for clone() issue
+ * Issue: clone() was getting a different color than the variable it was called on
+ */
+describe('LocationAnalyzer Clone Regression Tests', () => {
+  function parseTypeParameters(params: string): string[] {
+    const result: string[] = [];
+    let current = '';
+    let angleDepth = 0;
+    let parenDepth = 0;
+
+    for (let i = 0; i < params.length; i++) {
+      const char = params[i];
+
+      if (char === '<') {
+        angleDepth++;
+        current += char;
+      } else if (char === '>') {
+        angleDepth--;
+        current += char;
+      } else if (char === '(') {
+        parenDepth++;
+        current += char;
+      } else if (char === ')') {
+        parenDepth--;
+        current += char;
+      } else if (char === ',' && angleDepth === 0 && parenDepth === 0) {
+        result.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+
+    if (current.trim()) {
+      result.push(current.trim());
+    }
+
+    return result;
+  }
+
+  function parseLocationType(fullType: string): string | null {
+    let unwrapped = fullType;
+    unwrapped = unwrapped.replace(/^&(?:mut\s+)?/, '');
+
+    const collectionMatch = unwrapped.match(/^(Stream|KeyedStream|Optional|Singleton|KeyedSingleton)<(.+)>$/);
+    if (collectionMatch) {
+      const params = collectionMatch[2];
+      const typeParams = parseTypeParameters(params);
+      const locationIndex = collectionMatch[1].startsWith('Keyed') ? 2 : 1;
+
+      if (typeParams.length > locationIndex) {
+        const locationParam = typeParams[locationIndex].trim();
+        return parseLocationType(locationParam);
+      }
+    }
+
+    const tickWrappers: string[] = [];
+    let current = unwrapped;
+    let tickMatch = current.match(/^Tick<(.+)>$/);
+
+    while (tickMatch) {
+      tickWrappers.push('Tick');
+      current = tickMatch[1];
+      tickMatch = current.match(/^Tick<(.+)>$/);
+    }
+
+    const locationMatch = current.match(/(Process|Cluster|External)<'[^,>]+,\s*([^>,]+)>/);
+    if (locationMatch) {
+      const locationKind = locationMatch[1];
+      const typeParam = locationMatch[2].trim();
+      let result = `${locationKind}<${typeParam}>`;
+
+      for (let i = tickWrappers.length - 1; i >= 0; i--) {
+        result = `Tick<${result}>`;
+      }
+
+      return result;
+    }
+
+    const simpleMatch = current.match(/(Process|Cluster|External)</);
+    if (simpleMatch) {
+      let result = simpleMatch[1];
+
+      for (let i = tickWrappers.length - 1; i >= 0; i--) {
+        result = `Tick<${result}>`;
+      }
+
+      return result;
+    }
+
+    return null;
+  }
+
+  test('Variable with short Stream form should extract location', () => {
+    // This is what rust-analyzer returns for a variable declaration
+    const variableType = "Stream<SequencedKv<K, V>, Tick<Cluster<'a, Replica>>, Bounded>";
+    const result = parseLocationType(variableType);
+    expect(result).toBe('Tick<Cluster<Replica>>');
+  });
+
+  test('clone() with long Stream form should extract same location', () => {
+    // This is what rust-analyzer returns for clone() method
+    const cloneType =
+      "Stream<SequencedKv<K, V>, Tick<Cluster<'a, Replica>>, Bounded, TotalOrder, ExactlyOnce>";
+    const result = parseLocationType(cloneType);
+    expect(result).toBe('Tick<Cluster<Replica>>');
+  });
+
+  test('Short and long Stream forms should extract identical location', () => {
+    const shortForm = "Stream<SequencedKv<K, V>, Tick<Cluster<'a, Replica>>, Bounded>";
+    const longForm =
+      "Stream<SequencedKv<K, V>, Tick<Cluster<'a, Replica>>, Bounded, TotalOrder, ExactlyOnce>";
+
+    const shortResult = parseLocationType(shortForm);
+    const longResult = parseLocationType(longForm);
+
+    expect(shortResult).toBe(longResult);
+    expect(shortResult).toBe('Tick<Cluster<Replica>>');
+  });
+
+  test('Variable type extraction from declaration', () => {
+    // Simulate extracting type from "r_processable_payloads: Stream<...>"
+    const declaration = "r_processable_payloads: Stream<SequencedKv<K, V>, Tick<Cluster<'a, Replica>>, Bounded>";
+    const colonMatch = declaration.match(/:\s*(.+)$/);
+    
+    expect(colonMatch).toBeTruthy();
+    const varType = colonMatch![1].trim();
+    expect(varType).toBe("Stream<SequencedKv<K, V>, Tick<Cluster<'a, Replica>>, Bounded>");
+    
+    const result = parseLocationType(varType);
+    expect(result).toBe('Tick<Cluster<Replica>>');
+  });
+
+  test('Optional with short and long forms should match', () => {
+    const shortForm = "Optional<usize, Tick<Process<'a, Leader>>, Bounded>";
+    const longForm = "Optional<usize, Tick<Process<'a, Leader>>, Bounded, NoOrder>";
+
+    const shortResult = parseLocationType(shortForm);
+    const longResult = parseLocationType(longForm);
+
+    expect(shortResult).toBe(longResult);
+    expect(shortResult).toBe('Tick<Process<Leader>>');
+  });
+
+  test('KeyedStream with short and long forms should match', () => {
+    const shortForm = "KeyedStream<K, V, Tick<Cluster<'a, Worker>>, Bounded>";
+    const longForm = "KeyedStream<K, V, Tick<Cluster<'a, Worker>>, Bounded, TotalOrder, ExactlyOnce>";
+
+    const shortResult = parseLocationType(shortForm);
+    const longResult = parseLocationType(longForm);
+
+    expect(shortResult).toBe(longResult);
+    expect(shortResult).toBe('Tick<Cluster<Worker>>');
   });
 });

@@ -166,10 +166,15 @@ export function clearDecorationTypes(): void {
 }
 
 /**
- * Clear the type cache (useful when rust-analyzer reanalyzes)
+ * Clear the type cache and decoration types (useful when rust-analyzer reanalyzes or theme changes)
  * Optionally clear cache for a specific file only
  */
 export function clearCache(fileUri?: string): void {
+  // Clear decoration types so they get recreated with new theme colors
+  decorationTypesByLocation.forEach((d) => d.dispose());
+  decorationTypesByLocation.clear();
+  
+  // Clear analyzer cache
   locationAnalyzer.clearCache(fileUri);
 }
 

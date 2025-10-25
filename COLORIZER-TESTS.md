@@ -63,12 +63,14 @@ Tests that require a full VSCode instance with rust-analyzer. These test the end
   - Handle empty location info arrays
   - Handle duplicate ranges
 
-### 3. Test Data Files (`test-fixtures/colorizer-test-data/`)
+### 3. Test Data Files (`test-fixtures/sample-hydro-project/src/`)
 
-Real Rust code samples from the Hydro test suite:
+Real Rust code samples from the Hydro test suite, integrated into a proper Cargo project:
 
 - **`paxos.rs`** - Complex Paxos implementation with Proposer and Acceptor clusters
 - **`simple_cluster.rs`** - Simple cluster examples with Process and Cluster types
+
+These files are part of `sample-hydro-project` which has proper Cargo.toml dependencies, allowing rust-analyzer to resolve types correctly.
 
 ## Shared Configuration
 

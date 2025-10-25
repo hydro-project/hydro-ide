@@ -22,17 +22,17 @@ export const LIGHT_MODE_PALETTE = [
 
 /**
  * Color palette for dark theme
- * Using ColorBrewer Set2 palette with higher opacity and adjusted colors for dark backgrounds
+ * Using ColorBrewer Set1 palette with higher saturation for better visibility on dark backgrounds
  */
 export const DARK_MODE_PALETTE = [
-  'rgba(102, 194, 165, 0.25)', // teal - slightly more opaque
-  'rgba(252, 141, 98, 0.25)',  // coral
-  'rgba(141, 160, 203, 0.25)', // lavender
-  'rgba(231, 138, 195, 0.25)', // pink
-  'rgba(166, 216, 84, 0.25)',  // lime
-  'rgba(255, 217, 47, 0.25)',  // yellow
-  'rgba(229, 196, 148, 0.25)', // tan
-  'rgba(200, 200, 200, 0.25)', // lighter gray for dark mode
+  'rgba(228, 26, 28, 0.30)',   // red
+  'rgba(55, 126, 184, 0.30)',  // blue
+  'rgba(77, 175, 74, 0.30)',   // green
+  'rgba(152, 78, 163, 0.30)',  // purple
+  'rgba(255, 127, 0, 0.30)',   // orange
+  'rgba(255, 255, 51, 0.30)',  // yellow
+  'rgba(166, 86, 40, 0.30)',   // brown
+  'rgba(247, 129, 191, 0.30)', // pink
 ] as const;
 
 /**

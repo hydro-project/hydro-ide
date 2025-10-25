@@ -913,8 +913,8 @@ ${testBodies}
    * Convert DOT format to Hydroscope JSON format
    */
   private convertDotToHydroscopeJson(dotContent: string): string {
-    const nodes: any[] = [];
-    const edges: any[] = [];
+    const nodes: Array<Record<string, unknown>> = [];
+    const edges: Array<Record<string, unknown>> = [];
 
     // Parse DOT content to extract nodes and edges
     const lines = dotContent.split('\n');
@@ -943,7 +943,7 @@ ${testBodies}
       const edgeMatch = trimmed.match(/^n(\d+)\s*->\s*n(\d+)(?:\s*\[([^\]]+)\])?/);
       if (edgeMatch) {
         const [, source, target, attributes] = edgeMatch;
-        const edge: any = {
+        const edge: Record<string, unknown> = {
           id: `e${edges.length}`,
           source: source,
           target: target,

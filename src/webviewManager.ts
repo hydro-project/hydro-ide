@@ -319,9 +319,6 @@ export class WebviewManager {
     const scriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webview.js')
     );
-    const styleUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webview.css')
-    );
 
     // Generate a nonce for Content Security Policy
     const nonce = this.getNonce();
@@ -340,7 +337,6 @@ export class WebviewManager {
     connect-src ${webview.cspSource};
   ">
   <title>Hydro Dataflow Graph</title>
-  <link href="${styleUri}" rel="stylesheet">
 </head>
 <body>
   <div id="root"></div>

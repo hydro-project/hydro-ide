@@ -536,7 +536,7 @@ suite('ScopeAnalyzer Real File Tests', () => {
       assert.ok(functionMatches && functionMatches.length >= 5, 'Should have at least 5 public functions');
     } catch (error) {
       // If file doesn't exist, skip test
-      console.log('Test fixture not found, skipping test');
+      // Test fixture not found, skipping test
     }
   });
 
@@ -559,7 +559,7 @@ suite('ScopeAnalyzer Real File Tests', () => {
       assert.ok(functionMatches && functionMatches.length >= 6, 'Should have at least 6 public functions');
     } catch (error) {
       // If file doesn't exist, skip test
-      console.log('Test fixture not found, skipping test');
+      // Test fixture not found, skipping test
     }
   });
 
@@ -582,7 +582,7 @@ suite('ScopeAnalyzer Real File Tests', () => {
       assert.ok(functionMatches && functionMatches.length >= 5, 'Should have at least 5 public functions');
     } catch (error) {
       // If file doesn't exist, skip test
-      console.log('Test fixture not found, skipping test');
+      // Test fixture not found, skipping test
     }
   });
 });

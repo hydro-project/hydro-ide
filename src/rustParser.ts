@@ -28,7 +28,7 @@ export class RustParser {
   constructor() {
     try {
       this.parser = new Parser();
-      this.parser.setLanguage(Rust as any);
+      this.parser.setLanguage(Rust as Parser.Language);
     } catch (error) {
       throw new Error(`Failed to initialize tree-sitter parser: ${error}`);
     }

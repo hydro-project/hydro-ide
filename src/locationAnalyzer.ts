@@ -52,6 +52,7 @@ function log(message: string): void {
  * - "Tick<Cluster<'a, Worker>>" -> "Tick<Cluster<Worker>>"
  * - "&Tick<Process<'a, Leader>>" -> "Tick<Process<Leader>>"
  * - "Optional<(), Tick<Cluster<'_, Proposer>>, Bounded>" -> "Tick<Cluster<Proposer>>"
+ * - "Tick<Tick<Process<'a, Leader>>>" -> "Tick<Tick<Process<Leader>>>"
  */
 function parseLocationType(fullType: string): string | null {
   let unwrapped = fullType;
@@ -59,36 +60,43 @@ function parseLocationType(fullType: string): string | null {
   // Remove leading & or &mut
   unwrapped = unwrapped.replace(/^&(?:mut\s+)?/, '');
   
-  // First, try to find Tick<Process/Cluster/External<...>> anywhere in the type
-  const tickedLocationMatch = unwrapped.match(/Tick<(Process|Cluster|External)<'[^,>]+,\s*([^>,]+)>>/);
-  if (tickedLocationMatch) {
-    const locationKind = tickedLocationMatch[1];
-    const typeParam = tickedLocationMatch[2].trim();
-    return `Tick<${locationKind}<${typeParam}>>`;
-  }
+  // Count and strip Tick wrappers from the beginning, preserving them for later
+  const tickWrappers: string[] = [];
+  let current = unwrapped;
+  let tickMatch = current.match(/^Tick<(.+)>$/);
   
-  // Check if the whole type is Tick<...>
-  const tickMatch = unwrapped.match(/^Tick<(.+)>$/);
-  const hasTick = !!tickMatch;
-  if (hasTick) {
-    unwrapped = tickMatch![1];
+  while (tickMatch) {
+    tickWrappers.push('Tick');
+    current = tickMatch[1];
+    tickMatch = current.match(/^Tick<(.+)>$/);
   }
   
   // Match Process<'a, X> or Cluster<'_, X> or External<'a, X>
-  const locationMatch = unwrapped.match(/(Process|Cluster|External)<'[^,>]+,\s*([^>,]+)>/);
+  const locationMatch = current.match(/(Process|Cluster|External)<'[^,>]+,\s*([^>,]+)>/);
   if (locationMatch) {
     const locationKind = locationMatch[1];
     const typeParam = locationMatch[2].trim();
-    const baseLocation = `${locationKind}<${typeParam}>`;
-    // Preserve Tick wrapper in the location kind for color differentiation
-    return hasTick ? `Tick<${baseLocation}>` : baseLocation;
+    let result = `${locationKind}<${typeParam}>`;
+    
+    // Re-wrap with all the Tick wrappers we found
+    for (let i = tickWrappers.length - 1; i >= 0; i--) {
+      result = `Tick<${result}>`;
+    }
+    
+    return result;
   }
 
   // Fallback: just the location kind without type parameter
-  const simpleMatch = unwrapped.match(/(Process|Cluster|External)</);
+  const simpleMatch = current.match(/(Process|Cluster|External)</);
   if (simpleMatch) {
-    const baseLocation = simpleMatch[1];
-    return hasTick ? `Tick<${baseLocation}>` : baseLocation;
+    let result = simpleMatch[1];
+    
+    // Re-wrap with all the Tick wrappers we found
+    for (let i = tickWrappers.length - 1; i >= 0; i--) {
+      result = `Tick<${result}>`;
+    }
+    
+    return result;
   }
 
   return null;

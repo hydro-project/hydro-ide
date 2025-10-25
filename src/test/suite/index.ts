@@ -19,9 +19,9 @@ export function run(): Promise<void> {
   const testsRoot = path.resolve(__dirname, '..');
 
   return new Promise((resolve, reject) => {
-    glob('**/**.test.js', { cwd: testsRoot })
+    glob('**/**.test.js', { cwd: testsRoot, ignore: ['**/*.unit.test.js'] })
       .then((files: string[]) => {
-        // Add files to the test suite
+        // Add files to the test suite (excluding unit tests which use Vitest)
         files.forEach((f: string) => mocha.addFile(path.resolve(testsRoot, f)));
 
         try {

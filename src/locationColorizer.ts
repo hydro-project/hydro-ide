@@ -6,57 +6,12 @@
 
 import * as vscode from 'vscode';
 import * as locationAnalyzer from './locationAnalyzer';
+import { getBorderStyle, getColorByIndex } from './locationColorizerConfig';
 
 /**
  * Output channel for logging
  */
 let outputChannel: vscode.OutputChannel | null = null;
-
-/**
- * Color palette for different location instances
- * Using ColorBrewer Set2 palette for maximum distinction
- */
-const COLOR_PALETTE = [
-  'rgba(102, 194, 165, 0.20)', // teal
-  'rgba(252, 141, 98, 0.20)', // coral
-  'rgba(141, 160, 203, 0.20)', // lavender
-  'rgba(231, 138, 195, 0.20)', // pink
-  'rgba(166, 216, 84, 0.20)', // lime
-  'rgba(255, 217, 47, 0.20)', // yellow
-  'rgba(229, 196, 148, 0.20)', // tan
-  'rgba(179, 179, 179, 0.20)', // gray
-];
-
-/**
- * Get border style based on location kind (Process, Cluster, External)
- */
-function getBorderStyle(locationKind: string): {
-  borderRadius: string;
-  border?: string;
-  outline?: string;
-} {
-  if (locationKind.startsWith('Process')) {
-    // Process: no border, just background
-    return {
-      borderRadius: '3px',
-    };
-  } else if (locationKind.startsWith('Cluster')) {
-    // Cluster: double border (darker)
-    return {
-      borderRadius: '3px',
-      border: '2px double rgba(0, 0, 0, 0.4)',
-    };
-  } else if (locationKind.startsWith('External')) {
-    // External: single border (darker)
-    return {
-      borderRadius: '3px',
-      border: '1px solid rgba(0, 0, 0, 0.4)',
-    };
-  }
-  return {
-    borderRadius: '3px',
-  };
-}
 
 /**
  * Decoration types mapped by full location type (e.g., "Process<Leader>")
@@ -88,7 +43,7 @@ function getDecorationForLocation(
   if (!decorationTypesByLocation.has(locationKind)) {
     const borderStyle = getBorderStyle(locationKind);
     const decorationType = vscode.window.createTextEditorDecorationType({
-      backgroundColor: COLOR_PALETTE[colorIndex % COLOR_PALETTE.length],
+      backgroundColor: getColorByIndex(colorIndex),
       ...borderStyle,
     });
     decorationTypesByLocation.set(locationKind, decorationType);

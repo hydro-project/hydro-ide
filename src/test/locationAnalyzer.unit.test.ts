@@ -5,7 +5,7 @@
  */
 
 import { describe, test, expect } from 'vitest';
-import { COLOR_PALETTE, getBorderStyle, getColorByIndex } from '../locationColorizerConfig';
+import { COLOR_PALETTE, getBorderStyle, getColorByIndex } from '../coloring/locationColorizerConfig';
 
 /**
  * Test Location type parsing logic

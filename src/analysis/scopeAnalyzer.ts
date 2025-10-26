@@ -17,7 +17,7 @@ import {
   ScopeDetectionError,
   ScopeErrorCategory,
   ScopeAnalyzerConfig,
-} from './types';
+} from '../core/types';
 import { RustParser } from './rustParser';
 
 /**

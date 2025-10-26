@@ -13,6 +13,120 @@ import * as vscode from 'vscode';
 let outputChannel: vscode.OutputChannel | null = null;
 
 /**
+ * Check if an operator is a sink operator by analyzing its method signature
+ *
+ * Sink operators are identified by:
+ * 1. Return type is unit type ()
+ * 2. Take a live collection as self (Stream, Singleton, Optional, etc.)
+ * 3. Are method calls (not standalone functions)
+ *
+ * This avoids hardcoding operator names and uses the actual type signature.
+ */
+async function isSinkOperatorBySignature(
+  document: vscode.TextDocument,
+  position: vscode.Position,
+  operatorName: string,
+  returnType: string,
+  timeout: number
+): Promise<boolean> {
+  // Must return unit type to be a sink operator
+  if (returnType !== '()') {
+    return false;
+  }
+
+  // Must be a method call (preceded by '.')
+  const lineText = document.lineAt(position.line).text;
+  const charBefore = position.character > 0 ? lineText[position.character - 1] : '';
+  if (charBefore !== '.') {
+    return false;
+  }
+
+  // Get the full method signature to analyze the self parameter
+  try {
+    const hoverPromise = vscode.commands.executeCommand<vscode.Hover[]>(
+      'vscode.executeHoverProvider',
+      document.uri,
+      position
+    );
+
+    const hovers = await Promise.race([
+      hoverPromise,
+      createTimeout(timeout, 'isSinkOperatorBySignature'),
+    ]);
+
+    if (!hovers || hovers.length === 0) {
+      return false;
+    }
+
+    // Extract method signature from hover content
+    for (const hover of hovers) {
+      if (!hover || !hover.contents) {
+        continue;
+      }
+
+      for (const content of hover.contents) {
+        const contentStr = typeof content === 'string' ? content : content.value;
+        if (!contentStr) {
+          continue;
+        }
+
+        // Look for Rust code blocks containing the method signature
+        const codeBlocks = contentStr.matchAll(/```rust\n([^`]+)\n```/g);
+        for (const match of codeBlocks) {
+          const blockText = match[1].trim();
+
+          // Check if this method takes a live collection as self
+          if (takesSelfAsLiveCollection(blockText)) {
+            log(`  DEBUG: Identified '${operatorName}' as sink operator by signature analysis`);
+            return true;
+          }
+        }
+      }
+    }
+  } catch (error) {
+    log(`  WARNING: Error analyzing signature for '${operatorName}': ${error}`);
+  }
+
+  return false;
+}
+
+/**
+ * Check if a method signature takes a live collection as self parameter
+ *
+ * Analyzes the method signature to see if self is a live collection type.
+ */
+function takesSelfAsLiveCollection(methodSignature: string): boolean {
+  // Look for method signatures like:
+  // pub fn for_each<F>(self, f: F) -> ()
+  // where self is consumed (not &self or &mut self)
+
+  // Match method signatures that consume self (not borrow it)
+  const selfConsumingMatch = methodSignature.match(/pub\s+fn\s+\w+[^(]*\(\s*self\s*[,)]/);
+  if (!selfConsumingMatch) {
+    return false;
+  }
+
+  // Look for where clause or impl block that indicates self is a live collection
+  // Pattern: impl<...> Stream<...> or impl<...> Singleton<...> etc.
+  const implMatch = methodSignature.match(
+    /impl[^{]*\b(Stream|Singleton|Optional|KeyedStream|KeyedSingleton)\b/
+  );
+  if (implMatch) {
+    return true;
+  }
+
+  // Alternative: look for where Self: LiveCollection or similar bounds
+  const whereMatch = methodSignature.match(
+    /where[^{]*Self[^{]*:\s*[^{]*\b(Stream|Singleton|Optional|KeyedStream|KeyedSingleton)\b/
+  );
+  if (whereMatch) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Location information extracted from rust-analyzer
  */
 export interface LocationInfo {
@@ -24,11 +138,13 @@ export interface LocationInfo {
   range: vscode.Range;
   /** The operator name (e.g., "map", "filter", "cross_product") */
   operatorName: string;
+  /** Full return type of the operator (e.g., "Stream<T, Process<Leader>, Unbounded, TotalOrder>") - optional, for LSP graph extraction */
+  fullReturnType?: string;
 }
 
 /**
  * Cache entry for storing analysis results
- * 
+ *
  * Each entry stores the complete analysis results for a document at a specific version.
  * The version number is critical for cache invalidation - when a document is edited,
  * its version increments, causing cache misses until re-analysis completes.
@@ -44,14 +160,14 @@ interface CacheEntry {
 
 /**
  * Module-level cache for analysis results
- * 
+ *
  * CACHE IMPLEMENTATION:
  * - Uses a Map for O(1) lookup by document URI
  * - Key: document URI string (e.g., "file:///path/to/file.rs")
  * - Value: CacheEntry with locations, version, and timestamp
  * - Cache is version-aware: entries are only valid if document version matches
  * - Cache is bounded by size limit (default 50 entries) with LRU eviction
- * 
+ *
  * CACHE INVALIDATION:
  * - Automatic: When document version changes (on edit), getCached() returns null
  * - Manual: clearCache() can clear specific file or entire cache
@@ -61,14 +177,14 @@ const cache = new Map<string, CacheEntry>();
 
 /**
  * LRU (Least Recently Used) order tracking array
- * 
+ *
  * LRU EVICTION ALGORITHM:
  * - Array maintains document URIs in order of access (oldest first, newest last)
  * - On cache hit: URI is moved to end of array (most recently used)
  * - On cache set: URI is added to end of array
  * - On eviction: First URI in array is removed (least recently used)
  * - This ensures frequently accessed files stay in cache while old files are evicted
- * 
+ *
  * COMPLEXITY:
  * - Access: O(n) for finding URI in array, but n is small (max 50-500 entries)
  * - Eviction: O(1) for removing first element
@@ -78,7 +194,7 @@ const lruOrder: string[] = [];
 
 /**
  * Cache statistics counters
- * 
+ *
  * Used for monitoring cache effectiveness:
  * - cacheHits: Number of times cached results were used (avoided re-analysis)
  * - cacheMisses: Number of times analysis was required (no valid cache entry)
@@ -126,71 +242,71 @@ function parseLocationType(fullType: string): string | null {
 
     let unwrapped = fullType;
 
-  // Remove leading & or &mut
-  unwrapped = unwrapped.replace(/^&(?:mut\s+)?/, '');
+    // Remove leading & or &mut
+    unwrapped = unwrapped.replace(/^&(?:mut\s+)?/, '');
 
-  // For Stream/KeyedStream/Optional/Singleton/KeyedSingleton types, extract the location parameter
-  // These types have the location as the second or third type parameter
-  // Stream<T, L, ...> or KeyedStream<K, V, L, ...> or Optional<T, L, ...> etc.
-  const collectionMatch = unwrapped.match(
-    /^(Stream|KeyedStream|Optional|Singleton|KeyedSingleton)<(.+)>$/
-  );
-  if (collectionMatch) {
-    const params = collectionMatch[2];
-    // Parse type parameters carefully, respecting nested angle brackets
-    const typeParams = parseTypeParameters(params);
+    // For Stream/KeyedStream/Optional/Singleton/KeyedSingleton types, extract the location parameter
+    // These types have the location as the second or third type parameter
+    // Stream<T, L, ...> or KeyedStream<K, V, L, ...> or Optional<T, L, ...> etc.
+    const collectionMatch = unwrapped.match(
+      /^(Stream|KeyedStream|Optional|Singleton|KeyedSingleton)<(.+)>$/
+    );
+    if (collectionMatch) {
+      const params = collectionMatch[2];
+      // Parse type parameters carefully, respecting nested angle brackets
+      const typeParams = parseTypeParameters(params);
 
-    // For Stream, Optional, Singleton: location is 2nd parameter (index 1)
-    // For KeyedStream, KeyedSingleton: location is 3rd parameter (index 2)
-    const locationIndex = collectionMatch[1].startsWith('Keyed') ? 2 : 1;
+      // For Stream, Optional, Singleton: location is 2nd parameter (index 1)
+      // For KeyedStream, KeyedSingleton: location is 3rd parameter (index 2)
+      const locationIndex = collectionMatch[1].startsWith('Keyed') ? 2 : 1;
 
-    if (typeParams.length > locationIndex) {
-      const locationParam = typeParams[locationIndex].trim();
-      // Recursively parse the location parameter (it might be Tick<Process<...>>)
-      return parseLocationType(locationParam);
-    }
-  }
-
-  // Count and strip Tick wrappers from the beginning, preserving them for later
-  const tickWrappers: string[] = [];
-  let current = unwrapped;
-  let tickMatch = current.match(/^Tick<(.+)>$/);
-
-  while (tickMatch) {
-    tickWrappers.push('Tick');
-    current = tickMatch[1];
-    tickMatch = current.match(/^Tick<(.+)>$/);
-  }
-
-  // Match Process<'a, X> or Cluster<'_, X> or External<'a, X>
-  const locationMatch = current.match(/(Process|Cluster|External)<'[^,>]+,\s*([^>,]+)>/);
-  if (locationMatch) {
-    const locationKind = locationMatch[1];
-    const typeParam = locationMatch[2].trim();
-    let result = `${locationKind}<${typeParam}>`;
-
-    // Re-wrap with all the Tick wrappers we found
-    for (let i = tickWrappers.length - 1; i >= 0; i--) {
-      result = `Tick<${result}>`;
+      if (typeParams.length > locationIndex) {
+        const locationParam = typeParams[locationIndex].trim();
+        // Recursively parse the location parameter (it might be Tick<Process<...>>)
+        return parseLocationType(locationParam);
+      }
     }
 
-    return result;
-  }
+    // Count and strip Tick wrappers from the beginning, preserving them for later
+    const tickWrappers: string[] = [];
+    let current = unwrapped;
+    let tickMatch = current.match(/^Tick<(.+)>$/);
 
-  // Fallback: just the location kind without type parameter
-  const simpleMatch = current.match(/(Process|Cluster|External)</);
-  if (simpleMatch) {
-    let result = simpleMatch[1];
-
-    // Re-wrap with all the Tick wrappers we found
-    for (let i = tickWrappers.length - 1; i >= 0; i--) {
-      result = `Tick<${result}>`;
+    while (tickMatch) {
+      tickWrappers.push('Tick');
+      current = tickMatch[1];
+      tickMatch = current.match(/^Tick<(.+)>$/);
     }
 
-    return result;
-  }
+    // Match Process<'a, X> or Cluster<'_, X> or External<'a, X>
+    const locationMatch = current.match(/(Process|Cluster|External)<'[^,>]+,\s*([^>,]+)>/);
+    if (locationMatch) {
+      const locationKind = locationMatch[1];
+      const typeParam = locationMatch[2].trim();
+      let result = `${locationKind}<${typeParam}>`;
 
-  return null;
+      // Re-wrap with all the Tick wrappers we found
+      for (let i = tickWrappers.length - 1; i >= 0; i--) {
+        result = `Tick<${result}>`;
+      }
+
+      return result;
+    }
+
+    // Fallback: just the location kind without type parameter
+    const simpleMatch = current.match(/(Process|Cluster|External)</);
+    if (simpleMatch) {
+      let result = simpleMatch[1];
+
+      // Re-wrap with all the Tick wrappers we found
+      for (let i = tickWrappers.length - 1; i >= 0; i--) {
+        result = `Tick<${result}>`;
+      }
+
+      return result;
+    }
+
+    return null;
   } catch (error) {
     // Handle malformed type strings gracefully
     if (error instanceof Error) {
@@ -228,7 +344,7 @@ function parseTypeParameters(params: string): string[] {
       } else if (char === '>') {
         angleDepth--;
         current += char;
-        
+
         // Validate bracket matching
         if (angleDepth < 0) {
           log(`WARNING: Mismatched angle brackets in type parameters: ${params}`);
@@ -240,7 +356,7 @@ function parseTypeParameters(params: string): string[] {
       } else if (char === ')') {
         parenDepth--;
         current += char;
-        
+
         // Validate parenthesis matching
         if (parenDepth < 0) {
           log(`WARNING: Mismatched parentheses in type parameters: ${params}`);
@@ -314,7 +430,9 @@ async function getTypeAtPosition(
 
     const line = document.lineAt(position.line);
     if (position.character < 0 || position.character > line.text.length) {
-      log(`  WARNING: Position char ${position.character} is out of bounds (line length: ${line.text.length})`);
+      log(
+        `  WARNING: Position char ${position.character} is out of bounds (line length: ${line.text.length})`
+      );
       return null;
     }
 
@@ -323,11 +441,8 @@ async function getTypeAtPosition(
       document.uri,
       position
     );
-    
-    const hovers = await Promise.race([
-      hoverPromise,
-      createTimeout(timeout, 'getTypeAtPosition')
-    ]);
+
+    const hovers = await Promise.race([hoverPromise, createTimeout(timeout, 'getTypeAtPosition')]);
 
     // Check for null/undefined hover response
     if (!hovers || hovers.length === 0) {
@@ -358,13 +473,13 @@ async function getTypeAtPosition(
               const returnTypeMatch = blockText.match(/->\s*([^\n{]+?)(?:\s*where|\s*$)/s);
               if (returnTypeMatch) {
                 let returnType = returnTypeMatch[1]?.replace(/\s+/g, ' ').trim();
-                
+
                 // Validate return type is not empty or malformed
                 if (!returnType || returnType.length === 0) {
                   log('  WARNING: Empty return type extracted from hover');
                   continue;
                 }
-                
+
                 log(`  Initial return type: ${returnType}`);
 
                 // Extract where clause once for reuse
@@ -496,26 +611,26 @@ async function getTypeAtPosition(
             const typeMatch = contentStr.match(/```rust\n([^`]+)\n```/);
             if (typeMatch) {
               const fullDecl = typeMatch[1]?.trim();
-              
+
               // Validate declaration is not empty
               if (!fullDecl || fullDecl.length === 0) {
                 log('  WARNING: Empty declaration extracted from hover');
                 continue;
               }
-              
+
               log(`  Variable/parameter declaration: ${fullDecl}`);
 
               // Extract just the type part after the colon
               const colonMatch = fullDecl.match(/:\s*(.+)$/);
               if (colonMatch) {
                 const varType = colonMatch[1]?.trim();
-                
+
                 // Validate type is not empty
                 if (!varType || varType.length === 0) {
                   log('  WARNING: Empty variable type extracted');
                   return fullDecl;
                 }
-                
+
                 log(`  Extracted variable type: ${varType}`);
                 return varType;
               }
@@ -581,22 +696,20 @@ async function getSemanticTokens(
       'vscode.provideDocumentSemanticTokens',
       document.uri
     );
-    
-    const tokens = await Promise.race([
-      tokensPromise,
-      createTimeout(timeout, 'getSemanticTokens')
-    ]);
-    
+
+    const tokens = await Promise.race([tokensPromise, createTimeout(timeout, 'getSemanticTokens')]);
+
     // Validate tokens structure
     if (!tokens) {
       return null;
     }
-    
-    if (!tokens.data || !Array.isArray(tokens.data)) {
+
+    // tokens.data is a Uint32Array, not a regular array
+    if (!tokens.data || !(tokens.data instanceof Uint32Array) || tokens.data.length === 0) {
       log('WARNING: Semantic tokens returned but data is invalid or missing');
       return null;
     }
-    
+
     return tokens;
   } catch (error) {
     // Classify and log errors with appropriate severity
@@ -609,7 +722,9 @@ async function getSemanticTokens(
         log(`INFO: rust-analyzer not ready for semantic tokens query`);
       } else if (error.message.includes('command') && error.message.includes('not found')) {
         // Command not found - rust-analyzer may not be installed
-        log(`ERROR: Semantic tokens command not found. rust-analyzer may not be installed or enabled.`);
+        log(
+          `ERROR: Semantic tokens command not found. rust-analyzer may not be installed or enabled.`
+        );
       } else {
         // Other errors - log as error with details
         log(`ERROR getting semantic tokens: ${error.message}`);
@@ -644,24 +759,26 @@ export async function analyzeDocument(document: vscode.TextDocument): Promise<Lo
 
     log(`Analyzing ${document.fileName}...`);
     log(`Document has ${document.lineCount} lines, version ${document.version}`);
-    
+
     // Read configuration
     const config = vscode.workspace.getConfiguration('hydro-ide');
-    
+
     // Check if analysis is enabled
     const enabled = config.get<boolean>('analysis.enabled', true);
     if (!enabled) {
       log('INFO: Analysis is disabled in configuration');
       return [];
     }
-    
+
     // Check file size limit
     const maxFileSize = config.get<number>('analysis.maxFileSize', 10000);
     if (document.lineCount > maxFileSize) {
-      log(`INFO: Skipping analysis - file too large (${document.lineCount} lines > ${maxFileSize} max)`);
+      log(
+        `INFO: Skipping analysis - file too large (${document.lineCount} lines > ${maxFileSize} max)`
+      );
       return [];
     }
-    
+
     // Check cache first
     const uri = document.uri.toString();
     const cached = getCached(uri, document.version);
@@ -669,7 +786,7 @@ export async function analyzeDocument(document: vscode.TextDocument): Promise<Lo
       log(`Cache hit for ${document.fileName} v${document.version} (${cached.length} locations)`);
       return cached;
     }
-    
+
     log(`Cache miss for ${document.fileName} v${document.version}, analyzing...`);
     const startTime = Date.now();
 
@@ -679,7 +796,9 @@ export async function analyzeDocument(document: vscode.TextDocument): Promise<Lo
     // Get semantic tokens to find all identifiers
     const tokens = await getSemanticTokens(document, queryTimeout);
     if (!tokens) {
-      log('WARNING: No semantic tokens available. rust-analyzer may not be ready or file may not be valid Rust code.');
+      log(
+        'WARNING: No semantic tokens available. rust-analyzer may not be ready or file may not be valid Rust code.'
+      );
       return [];
     }
 
@@ -691,213 +810,231 @@ export async function analyzeDocument(document: vscode.TextDocument): Promise<Lo
 
     log(`Got ${tokens.data.length / 5} semantic tokens`);
 
-  const locationInfos: LocationInfo[] = [];
-  const seenPositions = new Set<string>();
+    const locationInfos: LocationInfo[] = [];
+    const seenPositions = new Set<string>();
 
-  // Parse semantic tokens
-  const data = tokens.data;
-  let line = 0;
-  let char = 0;
-  let candidateCount = 0;
-  let queriedCount = 0;
-  let foundLocationCount = 0;
+    // Parse semantic tokens
+    const data = tokens.data;
+    let line = 0;
+    let char = 0;
+    let candidateCount = 0;
+    let queriedCount = 0;
+    let foundLocationCount = 0;
 
-  for (let i = 0; i < data.length; i += 5) {
-    try {
-      // Validate we have enough data for a complete token
-      if (i + 4 >= data.length) {
-        log(`WARNING: Incomplete token data at index ${i}`);
-        break;
-      }
-
-      const deltaLine = data[i];
-      const deltaChar = data[i + 1];
-      const length = data[i + 2];
-      const tokenType = data[i + 3];
-
-      // Validate token data values
-      if (deltaLine < 0 || deltaChar < 0 || length <= 0) {
-        log(`WARNING: Invalid token data at index ${i}: deltaLine=${deltaLine}, deltaChar=${deltaChar}, length=${length}`);
-        continue;
-      }
-
-      // Update position
-      line += deltaLine;
-      char = deltaLine === 0 ? char + deltaChar : deltaChar;
-
-      // Skip tokens beyond document bounds (stale semantic tokens)
-      if (line < 0 || line >= document.lineCount) {
-        continue;
-      }
-
-      // We're interested in: 8=variable (includes methods), 12=parameter, 17=local variable/binding
-      // Note: rust-analyzer uses type 12 for function parameters, not 7
-      const isRelevant = tokenType === 8 || tokenType === 12 || tokenType === 17;
-      if (!isRelevant) {
-        continue;
-      }
-
-      const position = new vscode.Position(line, char);
-      const range = new vscode.Range(line, char, line, char + length);
-      
-      // Validate range is within document bounds
-      if (range.end.character > document.lineAt(line).text.length) {
-        log(`WARNING: Token range extends beyond line length at line ${line}`);
-        continue;
-      }
-
-      const name = document.getText(range);
-
-      // Validate name is not empty
-      if (!name || name.length === 0) {
-        continue;
-      }
-
-      candidateCount++;
-
-      // Skip macros
-      if (name === '!' || name.endsWith('!')) {
-        continue;
-      }
-
-      // Skip if we've already checked this position
-      const posKey = `${line}:${char}`;
-      if (seenPositions.has(posKey)) {
-        continue;
-      }
-      seenPositions.add(posKey);
-
-      // Query the type at this position
-      queriedCount++;
-
-      // Check if this is a method call (preceded by '.')
-      const lineText = document.lineAt(position.line).text;
-      const charBefore = position.character > 0 ? lineText[position.character - 1] : '';
-      const isMethodCall = charBefore === '.';
-
-      // Hover on the method name itself to get the signature with return type
-      const typeInfo = await getTypeAtPosition(document, position, isMethodCall, queryTimeout);
-
-      if (!typeInfo) {
-        continue;
-      }
-
-      // Check if it contains a Location type
-      const locationKind = parseLocationType(typeInfo);
-      if (locationKind && !locationKind.includes('…')) {
-        foundLocationCount++;
-        locationInfos.push({
-          locationType: typeInfo,
-          locationKind,
-          range,
-          operatorName: name,
-        });
-      }
-    } catch (error) {
-      // Log error but continue processing other tokens
-      if (error instanceof Error) {
-        log(`WARNING: Error processing token at index ${i}: ${error.message}`);
-      } else {
-        log(`WARNING: Unknown error processing token at index ${i}: ${String(error)}`);
-      }
-      continue;
-    }
-  }
-
-  log(
-    `Processed ${candidateCount} candidates, queried ${queriedCount}, found ${foundLocationCount} with Location types`
-  );
-
-  // Find struct definitions for the Location type parameters
-  try {
-    const structNames = new Set<string>();
-    locationInfos.forEach((info) => {
+    for (let i = 0; i < data.length; i += 5) {
       try {
-        const match = info.locationKind.match(/<([^>]+)>$/);
-        if (match && match[1]) {
-          structNames.add(match[1].trim());
+        // Validate we have enough data for a complete token
+        if (i + 4 >= data.length) {
+          log(`WARNING: Incomplete token data at index ${i}`);
+          break;
         }
-      } catch (error) {
-        log(`WARNING: Error extracting struct name from locationKind: ${info.locationKind}`);
-      }
-    });
 
-    // Search for struct definitions in the file
-    for (const structName of structNames) {
-      try {
-        // Validate struct name is not empty
-        if (!structName || structName.length === 0) {
+        const deltaLine = data[i];
+        const deltaChar = data[i + 1];
+        const length = data[i + 2];
+        const tokenType = data[i + 3];
+
+        // Validate token data values
+        if (deltaLine < 0 || deltaChar < 0 || length <= 0) {
+          log(
+            `WARNING: Invalid token data at index ${i}: deltaLine=${deltaLine}, deltaChar=${deltaChar}, length=${length}`
+          );
           continue;
         }
 
-        const pattern = new RegExp(`\\bstruct\\s+${structName}\\b`);
+        // Update position
+        line += deltaLine;
+        char = deltaLine === 0 ? char + deltaChar : deltaChar;
 
-        for (let lineNum = 0; lineNum < document.lineCount; lineNum++) {
-          const line = document.lineAt(lineNum);
-          const match = pattern.exec(line.text);
+        // Skip tokens beyond document bounds (stale semantic tokens)
+        if (line < 0 || line >= document.lineCount) {
+          continue;
+        }
 
-          if (match) {
-            const structKeywordMatch = line.text.match(/\bstruct\s+/);
-            if (structKeywordMatch && structKeywordMatch.index !== undefined) {
-              const structNameStart = structKeywordMatch.index + structKeywordMatch[0].length;
-              const structRange = new vscode.Range(
-                lineNum,
-                structNameStart,
-                lineNum,
-                structNameStart + structName.length
-              );
+        // We're interested in: 8=variable (includes methods), 12=parameter, 17=local variable/binding
+        // Note: rust-analyzer uses type 12 for function parameters, not 7
+        const isRelevant = tokenType === 8 || tokenType === 12 || tokenType === 17;
+        if (!isRelevant) {
+          continue;
+        }
 
-              // Find which location kind this struct belongs to
-              const locationKind = locationInfos.find((info) =>
-                info.locationKind.includes(`<${structName}>`)
-              )?.locationKind;
+        const position = new vscode.Position(line, char);
+        const range = new vscode.Range(line, char, line, char + length);
 
-              if (locationKind) {
-                locationInfos.push({
-                  locationType: locationKind,
-                  locationKind,
-                  range: structRange,
-                  operatorName: structName,
-                });
-              }
-            }
-            break;
-          }
+        // Validate range is within document bounds
+        if (range.end.character > document.lineAt(line).text.length) {
+          log(`WARNING: Token range extends beyond line length at line ${line}`);
+          continue;
+        }
+
+        const name = document.getText(range);
+
+        // Validate name is not empty
+        if (!name || name.length === 0) {
+          continue;
+        }
+
+        candidateCount++;
+
+        // Skip macros
+        if (name === '!' || name.endsWith('!')) {
+          continue;
+        }
+
+        // Skip if we've already checked this position
+        const posKey = `${line}:${char}`;
+        if (seenPositions.has(posKey)) {
+          continue;
+        }
+        seenPositions.add(posKey);
+
+        // Query the type at this position
+        queriedCount++;
+
+        // Check if this is a method call (preceded by '.')
+        const lineText = document.lineAt(position.line).text;
+        const charBefore = position.character > 0 ? lineText[position.character - 1] : '';
+        const isMethodCall = charBefore === '.';
+
+        // Hover on the method name itself to get the signature with return type
+        const typeInfo = await getTypeAtPosition(document, position, isMethodCall, queryTimeout);
+
+        if (!typeInfo) {
+          continue;
+        }
+
+        // Check if it contains a Location type or is a sink operator
+        const locationKind = parseLocationType(typeInfo);
+        const isSinkOperator = await isSinkOperatorBySignature(
+          document,
+          position,
+          name,
+          typeInfo,
+          queryTimeout
+        );
+
+        if ((locationKind && !locationKind.includes('…')) || isSinkOperator) {
+          foundLocationCount++;
+          log(`  DEBUG: Found operator '${name}' with typeInfo: ${typeInfo}`);
+
+          // For sink operators, we need to infer the location from context
+          // Since they don't have location in their return type, we'll use a placeholder
+          const effectiveLocationKind = locationKind || 'Process<Leader>'; // Default for sink operators
+
+          locationInfos.push({
+            locationType: typeInfo,
+            locationKind: effectiveLocationKind,
+            range,
+            operatorName: name,
+            fullReturnType: typeInfo, // Store full return type for LSP graph extraction
+          });
         }
       } catch (error) {
+        // Log error but continue processing other tokens
         if (error instanceof Error) {
-          log(`WARNING: Error searching for struct definition '${structName}': ${error.message}`);
+          log(`WARNING: Error processing token at index ${i}: ${error.message}`);
         } else {
-          log(`WARNING: Unknown error searching for struct '${structName}': ${String(error)}`);
+          log(`WARNING: Unknown error processing token at index ${i}: ${String(error)}`);
         }
+        continue;
       }
     }
-  } catch (error) {
-    if (error instanceof Error) {
-      log(`WARNING: Error finding struct definitions: ${error.message}`);
-    } else {
-      log(`WARNING: Unknown error finding struct definitions: ${String(error)}`);
+
+    log(
+      `Processed ${candidateCount} candidates, queried ${queriedCount}, found ${foundLocationCount} with Location types`
+    );
+
+    // Find struct definitions for the Location type parameters
+    try {
+      const structNames = new Set<string>();
+      locationInfos.forEach((info) => {
+        try {
+          const match = info.locationKind.match(/<([^>]+)>$/);
+          if (match && match[1]) {
+            structNames.add(match[1].trim());
+          }
+        } catch (error) {
+          log(`WARNING: Error extracting struct name from locationKind: ${info.locationKind}`);
+        }
+      });
+
+      // Search for struct definitions in the file
+      for (const structName of structNames) {
+        try {
+          // Validate struct name is not empty
+          if (!structName || structName.length === 0) {
+            continue;
+          }
+
+          const pattern = new RegExp(`\\bstruct\\s+${structName}\\b`);
+
+          for (let lineNum = 0; lineNum < document.lineCount; lineNum++) {
+            const line = document.lineAt(lineNum);
+            const match = pattern.exec(line.text);
+
+            if (match) {
+              const structKeywordMatch = line.text.match(/\bstruct\s+/);
+              if (structKeywordMatch && structKeywordMatch.index !== undefined) {
+                const structNameStart = structKeywordMatch.index + structKeywordMatch[0].length;
+                const structRange = new vscode.Range(
+                  lineNum,
+                  structNameStart,
+                  lineNum,
+                  structNameStart + structName.length
+                );
+
+                // Find which location kind this struct belongs to
+                const locationKind = locationInfos.find((info) =>
+                  info.locationKind.includes(`<${structName}>`)
+                )?.locationKind;
+
+                if (locationKind) {
+                  locationInfos.push({
+                    locationType: locationKind,
+                    locationKind,
+                    range: structRange,
+                    operatorName: structName,
+                    fullReturnType: locationKind, // Store full return type for LSP graph extraction
+                  });
+                }
+              }
+              break;
+            }
+          }
+        } catch (error) {
+          if (error instanceof Error) {
+            log(`WARNING: Error searching for struct definition '${structName}': ${error.message}`);
+          } else {
+            log(`WARNING: Unknown error searching for struct '${structName}': ${String(error)}`);
+          }
+        }
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        log(`WARNING: Error finding struct definitions: ${error.message}`);
+      } else {
+        log(`WARNING: Unknown error finding struct definitions: ${String(error)}`);
+      }
+      // Continue with partial results
     }
-    // Continue with partial results
-  }
 
-  const elapsedMs = Date.now() - startTime;
-  log(`Found ${locationInfos.length} location-typed identifiers in ${elapsedMs}ms`);
+    const elapsedMs = Date.now() - startTime;
+    log(`Found ${locationInfos.length} location-typed identifiers in ${elapsedMs}ms`);
 
-  // Store results in cache
-  try {
-    setCached(uri, document.version, locationInfos);
-    log(`Cached results for ${document.fileName} v${document.version}`);
-  } catch (error) {
-    if (error instanceof Error) {
-      log(`WARNING: Failed to cache results: ${error.message}`);
-    } else {
-      log(`WARNING: Failed to cache results: ${String(error)}`);
+    // Store results in cache
+    try {
+      setCached(uri, document.version, locationInfos);
+      log(`Cached results for ${document.fileName} v${document.version}`);
+    } catch (error) {
+      if (error instanceof Error) {
+        log(`WARNING: Failed to cache results: ${error.message}`);
+      } else {
+        log(`WARNING: Failed to cache results: ${String(error)}`);
+      }
+      // Continue even if caching fails
     }
-    // Continue even if caching fails
-  }
 
-  return locationInfos;
+    return locationInfos;
   } catch (error) {
     // Top-level error handler for the entire analysis function
     if (error instanceof Error) {
@@ -915,7 +1052,7 @@ export async function analyzeDocument(document: vscode.TextDocument): Promise<Lo
 
 /**
  * Retrieve cached analysis results for a document
- * 
+ *
  * CACHE LOOKUP LOGIC:
  * 1. Check if entry exists in cache Map (O(1) lookup)
  * 2. Verify document version matches cached version (version-based invalidation)
@@ -926,12 +1063,12 @@ export async function analyzeDocument(document: vscode.TextDocument): Promise<Lo
  * 4. On cache miss:
  *    - Increment miss counter
  *    - Return null (caller will perform analysis and cache results)
- * 
+ *
  * VERSION-BASED INVALIDATION:
  * - VSCode increments document.version on each edit
  * - If cached version != current version, cache is stale and miss is returned
  * - This ensures we never return outdated analysis results
- * 
+ *
  * @param uri Document URI string (e.g., "file:///path/to/file.rs")
  * @param version Document version number (from document.version)
  * @returns Cached locations if found and version matches, null otherwise
@@ -940,7 +1077,7 @@ function getCached(uri: string, version: number): LocationInfo[] | null {
   const entry = cache.get(uri);
   if (entry && entry.version === version) {
     // CACHE HIT: Entry exists and version matches
-    
+
     // Update LRU order: move this URI to end (most recently used)
     // This prevents frequently accessed files from being evicted
     const idx = lruOrder.indexOf(uri);
@@ -948,11 +1085,11 @@ function getCached(uri: string, version: number): LocationInfo[] | null {
       lruOrder.splice(idx, 1); // Remove from current position
     }
     lruOrder.push(uri); // Add to end (most recently used)
-    
+
     cacheHits++;
     return entry.locations;
   }
-  
+
   // CACHE MISS: Entry doesn't exist or version doesn't match
   cacheMisses++;
   return null;
@@ -960,26 +1097,26 @@ function getCached(uri: string, version: number): LocationInfo[] | null {
 
 /**
  * Store analysis results in cache with LRU eviction
- * 
+ *
  * CACHE STORAGE LOGIC:
  * 1. Read cache size limit from configuration (default: 50 entries)
  * 2. If cache is at capacity, evict least recently used entries
  * 3. Store new entry in cache Map
  * 4. Update LRU order array
- * 
+ *
  * LRU EVICTION ALGORITHM:
  * - When cache.size >= maxSize, evict entries until there's room
  * - Eviction: Remove first URI from lruOrder array (least recently used)
  * - Delete corresponding entry from cache Map
  * - This ensures cache never exceeds configured size limit
  * - Frequently accessed files stay in cache, old files are evicted
- * 
+ *
  * EXAMPLE:
  * - maxSize = 3, cache has [file1, file2, file3] (oldest to newest)
  * - User accesses file2 -> moves to end: [file1, file3, file2]
  * - User opens file4 -> evicts file1: [file3, file2, file4]
  * - file1 is evicted because it was least recently used
- * 
+ *
  * @param uri Document URI string (e.g., "file:///path/to/file.rs")
  * @param version Document version number (from document.version)
  * @param locations Analysis results to cache
@@ -988,22 +1125,22 @@ function setCached(uri: string, version: number, locations: LocationInfo[]): voi
   // Read cache size limit from user configuration
   const config = vscode.workspace.getConfiguration('hydro-ide');
   const maxSize = config.get<number>('performance.cacheSize', 50);
-  
+
   // LRU EVICTION: Remove oldest entries if cache is at capacity
   // Loop handles case where multiple entries need eviction (shouldn't happen normally)
   while (cache.size >= maxSize && lruOrder.length > 0) {
     // Remove first element from LRU array (least recently used)
     const oldest = lruOrder.shift()!;
-    
+
     // Delete corresponding cache entry
     cache.delete(oldest);
-    
+
     log(`Evicted cache entry for ${oldest} (LRU)`);
   }
-  
+
   // Store new entry in cache
   cache.set(uri, { locations, version, timestamp: Date.now() });
-  
+
   // Update LRU order: add URI to end (most recently used)
   // First remove if it already exists (handles re-caching same file)
   const idx = lruOrder.indexOf(uri);
@@ -1015,31 +1152,31 @@ function setCached(uri: string, version: number, locations: LocationInfo[]): voi
 
 /**
  * Clear cache entries
- * 
+ *
  * CACHE INVALIDATION:
  * - Selective: Clear specific file (used when file is closed or saved)
  * - Complete: Clear entire cache (used on configuration changes or manual clear)
- * 
+ *
  * WHEN TO CLEAR CACHE:
  * - File closed: After 60 seconds (in extension.ts)
  * - File saved: Immediately (to get fresh types from rust-analyzer)
  * - Configuration changed: Colors or analysis settings changed
  * - Manual: User runs "Clear Analysis Cache" command
  * - Extension deactivation: Clean up all resources
- * 
+ *
  * @param fileUri Optional specific file URI to clear. If not provided, clears entire cache
  */
 export function clearCache(fileUri?: string): void {
   if (fileUri) {
     // SELECTIVE CLEAR: Remove specific file from cache
     cache.delete(fileUri);
-    
+
     // Remove from LRU order array
     const idx = lruOrder.indexOf(fileUri);
     if (idx >= 0) {
       lruOrder.splice(idx, 1);
     }
-    
+
     log(`Cleared cache for ${fileUri}`);
   } else {
     // COMPLETE CLEAR: Remove all entries and reset statistics
@@ -1053,36 +1190,36 @@ export function clearCache(fileUri?: string): void {
 
 /**
  * Get cache statistics for monitoring and debugging
- * 
+ *
  * CACHE PERFORMANCE METRICS:
  * - numFiles: Current number of files in cache
  * - hits: Number of times cached results were used (avoided re-analysis)
  * - misses: Number of times analysis was required (no valid cache entry)
  * - hitRate: Ratio of hits to total requests (0.0 to 1.0)
  * - hitRatePercent: Hit rate as percentage string (e.g., "75.5")
- * 
+ *
  * INTERPRETING RESULTS:
  * - High hit rate (>50%): Cache is effective, reducing analysis overhead
  * - Low hit rate (<30%): Consider increasing cache size or checking for issues
  * - Zero hits: Cache may be disabled or files are changing too frequently
- * 
+ *
  * USAGE:
  * - Called by "Show Cache Statistics" command
  * - Displayed in output channel for debugging
  * - Helps tune cache size configuration
- * 
+ *
  * @returns Object containing cache statistics
  */
 export function getCacheStats() {
   const totalRequests = cacheHits + cacheMisses;
   const hitRate = totalRequests > 0 ? cacheHits / totalRequests : 0;
-  
+
   return {
-    numFiles: cache.size,           // Current cache size
-    totalEntries: cache.size,       // Same as numFiles (for compatibility)
-    hits: cacheHits,                // Number of cache hits
-    misses: cacheMisses,            // Number of cache misses
-    hitRate: hitRate,               // Hit rate as decimal (0.0-1.0)
+    numFiles: cache.size, // Current cache size
+    totalEntries: cache.size, // Same as numFiles (for compatibility)
+    hits: cacheHits, // Number of cache hits
+    misses: cacheMisses, // Number of cache misses
+    hitRate: hitRate, // Hit rate as decimal (0.0-1.0)
     hitRatePercent: (hitRate * 100).toFixed(1), // Hit rate as percentage string
   };
 }

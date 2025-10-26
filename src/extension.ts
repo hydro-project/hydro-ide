@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { HydroIDE } from './hydroIDE';
-import * as locationColorizer from './locationColorizer';
-import * as locationAnalyzer from './locationAnalyzer';
+import * as locationColorizer from './coloring/locationColorizer';
+import * as locationAnalyzer from './analysis/locationAnalyzer';
 
 /**
  * Output channel for logging extension operations
@@ -167,24 +167,62 @@ export function showStatus(message: string, autoHide: boolean = false): void {
  * Register commands for visualizing Hydro code at different scopes
  */
 function registerVisualizationCommands(context: vscode.ExtensionContext) {
-  // Visualize function at cursor
+  // Visualize function at cursor (smart router - uses configured default mode)
   context.subscriptions.push(
     vscode.commands.registerCommand('hydro-ide.visualizeFunction', async () => {
       await hydroIDE.visualizeScope('function');
     })
   );
 
-  // Visualize all functions in current file
+  // Visualize all functions in current file (smart router - uses configured default mode)
   context.subscriptions.push(
     vscode.commands.registerCommand('hydro-ide.visualizeFile', async () => {
       await hydroIDE.visualizeScope('file');
     })
   );
 
-  // Visualize all Hydro code in workspace
+  // Visualize all Hydro code in workspace (smart router - uses configured default mode)
   context.subscriptions.push(
     vscode.commands.registerCommand('hydro-ide.visualizeWorkspace', async () => {
       await hydroIDE.visualizeScope('workspace');
+    })
+  );
+
+  // LSP-specific commands (fast path without compilation)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('hydro-ide.visualizeFunctionLSP', async () => {
+      await hydroIDE.visualizeScopeLSP('function');
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('hydro-ide.visualizeFileLSP', async () => {
+      await hydroIDE.visualizeScopeLSP('file');
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('hydro-ide.visualizeWorkspaceLSP', async () => {
+      await hydroIDE.visualizeScopeLSP('workspace');
+    })
+  );
+
+  // Cargo-specific commands (complete path with backtraces)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('hydro-ide.visualizeFunctionCargo', async () => {
+      await hydroIDE.visualizeScopeCargo('function');
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('hydro-ide.visualizeFileCargo', async () => {
+      await hydroIDE.visualizeScopeCargo('file');
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('hydro-ide.visualizeWorkspaceCargo', async () => {
+      await hydroIDE.visualizeScopeCargo('workspace');
     })
   );
 }

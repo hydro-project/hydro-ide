@@ -52,7 +52,7 @@ Hydro IDE enhances your Hydro development experience with intelligent code color
 4. Click "..." menu → "Install from VSIX..."
 5. Select the downloaded `.vsix` file
 
-For detailed installation instructions, see [INSTALL.md](INSTALL.md).
+For detailed installation instructions, see [INSTALL.md](docs/INSTALL.md).
 
 ### From Marketplace (Coming Soon)
 
@@ -412,10 +412,10 @@ Apache-2.0
 
 ## Documentation
 
-- **[Installation Guide](INSTALL.md)** - Detailed installation instructions
-- **[Quick Start Guide](QUICKSTART.md)** - Get started in 5 minutes
-- **[Testing Guide](VSIX-TESTING.md)** - Comprehensive testing checklist
-- **[Contributing Guide](CONTRIBUTING.md)** - Help improve the extension
+- **[Installation Guide](docs/INSTALL.md)** - Detailed installation instructions
+- **[Quick Start Guide](docs/QUICKSTART.md)** - Get started in 5 minutes
+- **[Testing Guide](docs/VSIX-TESTING.md)** - Comprehensive testing checklist
+- **[Contributing Guide](docs/CONTRIBUTING.md)** - Help improve the extension
 - **[Changelog](CHANGELOG.md)** - Version history and updates
 
 ## Links

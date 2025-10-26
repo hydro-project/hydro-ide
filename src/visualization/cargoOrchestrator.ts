@@ -12,7 +12,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import { spawn, ChildProcess } from 'child_process';
-import { ScopeTarget, HydroFunction } from './types';
+import { ScopeTarget, HydroFunction } from '../core/types';
 
 /**
  * Configuration for Cargo builds

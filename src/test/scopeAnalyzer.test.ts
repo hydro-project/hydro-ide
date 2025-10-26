@@ -9,11 +9,11 @@ import * as assert from 'assert';
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fsPromises from 'fs/promises';
-import { ScopeAnalyzer } from '../scopeAnalyzer';
+import { ScopeAnalyzer } from '../analysis/scopeAnalyzer';
 import {
   ScopeDetectionError,
   ScopeErrorCategory,
-} from '../types';
+} from '../core/types';
 
 /**
  * Mock output channel for testing

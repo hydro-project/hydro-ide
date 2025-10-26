@@ -10,7 +10,7 @@
 
 import * as vscode from 'vscode';
 import { ScopeDetectionError, ScopeErrorCategory } from './types';
-import { CargoError } from './cargoOrchestrator';
+import { CargoError } from '../visualization/cargoOrchestrator';
 
 /**
  * Error categories for the extension

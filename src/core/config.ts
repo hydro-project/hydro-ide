@@ -33,6 +33,18 @@ export interface HydroIdeConfig {
     largeGraphThreshold: number;
     warnOnLargeGraphs: boolean;
   };
+  
+  /** Visualization settings */
+  visualization: {
+    defaultMode: 'lsp' | 'cargo';
+  };
+  
+  /** LSP settings */
+  lsp: {
+    queryTimeout: number;
+    cacheSize: number;
+    enableDegradedMode: boolean;
+  };
 }
 
 /**
@@ -68,6 +80,14 @@ export class ConfigManager {
       performance: {
         largeGraphThreshold: vscodeConfig.get<number>('performance.largeGraphThreshold', 500),
         warnOnLargeGraphs: vscodeConfig.get<boolean>('performance.warnOnLargeGraphs', true),
+      },
+      visualization: {
+        defaultMode: vscodeConfig.get<'lsp' | 'cargo'>('visualization.defaultMode', 'lsp'),
+      },
+      lsp: {
+        queryTimeout: vscodeConfig.get<number>('lsp.queryTimeout', 5000),
+        cacheSize: vscodeConfig.get<number>('lsp.cacheSize', 50),
+        enableDegradedMode: vscodeConfig.get<boolean>('lsp.enableDegradedMode', true),
       },
     };
   }
@@ -164,5 +184,33 @@ export class ConfigManager {
    */
   shouldWarnOnLargeGraphs(): boolean {
     return this.config.performance.warnOnLargeGraphs;
+  }
+
+  /**
+   * Get default visualization mode
+   */
+  getDefaultVisualizationMode(): 'lsp' | 'cargo' {
+    return this.config.visualization.defaultMode;
+  }
+
+  /**
+   * Get LSP query timeout
+   */
+  getLSPQueryTimeout(): number {
+    return this.config.lsp.queryTimeout;
+  }
+
+  /**
+   * Get LSP cache size
+   */
+  getLSPCacheSize(): number {
+    return this.config.lsp.cacheSize;
+  }
+
+  /**
+   * Get LSP degraded mode setting
+   */
+  getLSPEnableDegradedMode(): boolean {
+    return this.config.lsp.enableDegradedMode;
   }
 }

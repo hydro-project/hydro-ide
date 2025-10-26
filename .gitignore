@@ -5,3 +5,16 @@ dist
 .vscode-test
 *.log
 .DS_Store
+
+# Debug output directories
+.hydro-debug/
+
+# Temporary test files
+test-*.js
+debug-*.js
+analyze-*.js
+validate-*.js
+final-*.js
+comprehensive-*.js
+integration-*.js
+quick-*.js

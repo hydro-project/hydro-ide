@@ -8,8 +8,8 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import * as path from 'path';
-import * as locationAnalyzer from '../locationAnalyzer';
-import { COLOR_PALETTE, getBorderStyle } from '../locationColorizerConfig';
+import * as locationAnalyzer from '../analysis/locationAnalyzer';
+import { COLOR_PALETTE, getBorderStyle } from '../coloring/locationColorizerConfig';
 
 suite('LocationColorizer Integration Tests', () => {
   let testDataDir: string;

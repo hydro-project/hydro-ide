@@ -8,7 +8,7 @@
  */
 
 import * as vscode from 'vscode';
-import { Logger } from './logger';
+import { Logger } from '../core/logger';
 
 /**
  * Graph statistics

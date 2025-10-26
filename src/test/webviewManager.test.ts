@@ -11,7 +11,7 @@
 
 import * as assert from 'assert';
 import * as vscode from 'vscode';
-import { WebviewManager, ViewState } from '../webviewManager';
+import { WebviewManager, ViewState } from '../visualization/webviewManager';
 
 suite('WebviewManager - Graph Data Communication', () => {
   let outputChannel: vscode.OutputChannel;

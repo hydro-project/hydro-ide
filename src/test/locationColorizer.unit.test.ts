@@ -5,7 +5,7 @@
  */
 
 import { describe, test, expect } from 'vitest';
-import { LIGHT_MODE_PALETTE, DARK_MODE_PALETTE, getColorByIndex } from '../locationColorizerConfig';
+import { LIGHT_MODE_PALETTE, DARK_MODE_PALETTE, getColorByIndex } from '../coloring/locationColorizerConfig';
 
 /**
  * Test theme-aware color selection

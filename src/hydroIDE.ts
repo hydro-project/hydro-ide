@@ -21,15 +21,16 @@
 
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { ScopeAnalyzer } from './scopeAnalyzer';
-import { CargoOrchestrator, CargoError } from './cargoOrchestrator';
-import { WebviewManager } from './webviewManager';
-import { ErrorHandler } from './errorHandler';
-import { ConfigManager } from './config';
-import { Logger } from './logger';
-import { ProgressReporter, createCargoBuildSteps } from './progressReporter';
-import { GraphValidator } from './graphValidator';
-import { ScopeType, ScopeTarget, CargoConfig } from './types';
+import { ScopeAnalyzer } from './analysis/scopeAnalyzer';
+import { CargoOrchestrator, CargoError } from './visualization/cargoOrchestrator';
+import { WebviewManager } from './visualization/webviewManager';
+import { ErrorHandler } from './core/errorHandler';
+import { ConfigManager } from './core/config';
+import { Logger } from './core/logger';
+import { ProgressReporter, createCargoBuildSteps } from './core/progressReporter';
+import { GraphValidator } from './visualization/graphValidator';
+import { LSPGraphExtractor } from './analysis/lspGraphExtractor';
+import { ScopeType, ScopeTarget, CargoConfig } from './core/types';
 
 /**
  * HydroIDE orchestrates all IDE features for Hydro development
@@ -44,6 +45,7 @@ export class HydroIDE {
   private readonly logger: Logger;
   private readonly progressReporter: ProgressReporter;
   private readonly graphValidator: GraphValidator;
+  private readonly lspGraphExtractor: LSPGraphExtractor;
   
   // Track current visualization state for refresh
   private currentScopeType?: ScopeType;
@@ -82,16 +84,141 @@ export class HydroIDE {
     this.scopeAnalyzer = new ScopeAnalyzer(outputChannel);
     this.cargoOrchestrator = new CargoOrchestrator(outputChannel);
     this.webviewManager = new WebviewManager(context, outputChannel);
+    this.lspGraphExtractor = new LSPGraphExtractor(outputChannel);
     
     this.logger.info('HydroIDE initialized successfully');
   }
 
   /**
-   * Visualize Hydro code at the specified scope
-   * Main entry point for visualization commands
+   * Visualize Hydro code using LSP (fast path)
+   * Generates visualization without Cargo compilation
    */
-  async visualizeScope(scopeType: ScopeType): Promise<void> {
-    this.logger.section(`Visualize ${scopeType} scope`);
+  async visualizeScopeLSP(scopeType: ScopeType): Promise<void> {
+    this.logger.section(`Visualize ${scopeType} scope (LSP)`);
+    
+    // Get active editor
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      await this.errorHandler.handleError(
+        new Error('No active editor found'),
+        `visualize${this.capitalize(scopeType)}LSP`
+      );
+      return;
+    }
+
+    // Verify it's a Rust file
+    if (editor.document.languageId !== 'rust') {
+      await this.errorHandler.handleError(
+        new Error('Active file is not a Rust file'),
+        `visualize${this.capitalize(scopeType)}LSP`
+      );
+      return;
+    }
+
+    this.logger.keyValue('File', editor.document.fileName);
+    if (scopeType === 'function') {
+      const position = editor.selection.active;
+      this.logger.keyValue('Cursor position', `line ${position.line + 1}, column ${position.character + 1}`);
+    }
+
+    try {
+      // Analyze scope
+      this.logger.info('Analyzing scope...');
+      const scopeTarget = await this.scopeAnalyzer.analyzeScope(editor, scopeType);
+      this.logger.info(`Found ${scopeTarget.functions.length} function(s)`);
+      
+      // Extract graph using LSP
+      this.logger.info('Extracting graph via LSP...');
+      const graphJson = await this.lspGraphExtractor.extractGraph(
+        editor.document,
+        scopeTarget
+      );
+      
+      // Validate graph
+      const validation = this.graphValidator.validate(JSON.stringify(graphJson));
+      
+      if (!validation.valid) {
+        throw new Error(`Invalid graph JSON: ${validation.errors.join(', ')}`);
+      }
+      
+      // Check for large graphs
+      if (validation.stats && validation.stats.isLarge) {
+        const proceed = await this.graphValidator.checkLargeGraph(validation.stats);
+        if (!proceed) {
+          this.logger.info('User cancelled visualization due to large graph');
+          return;
+        }
+      }
+      
+      // Display visualization
+      this.logger.info('Displaying visualization...');
+      await this.displayVisualization(scopeTarget, JSON.stringify(graphJson));
+      
+      // Store current state for refresh
+      this.currentScopeType = scopeType;
+      this.currentEditor = editor;
+      
+      // Show success message
+      const targetName = this.getTargetName(scopeTarget);
+      this.errorHandler.showInfo(`LSP visualization displayed for: ${targetName}`);
+      
+      // Show performance recommendation if applicable
+      if (validation.stats) {
+        const recommendation = this.graphValidator.getPerformanceRecommendation(validation.stats);
+        if (recommendation) {
+          this.errorHandler.showInfo(recommendation);
+        }
+      }
+    } catch (error) {
+      // Detect when LSP extraction fails or times out
+      // Requirements addressed:
+      // - 6.1: Detect when LSP extraction fails or times out
+      // - 1.5: Offer cargo fallback when LSP fails
+      
+      // Log fallback event for debugging
+      this.logger.error(`LSP visualization failed: ${error}`);
+      this.logger.warning('Offering cargo-based visualization as fallback');
+      
+      // Determine error type for better user messaging
+      let errorMessage = 'LSP visualization failed.';
+      if (error instanceof Error) {
+        if (error.message.includes('timeout') || error.message.includes('timed out')) {
+          errorMessage = 'LSP visualization timed out.';
+          this.logger.warning('Failure reason: LSP query timeout');
+        } else if (error.message.includes('rust-analyzer') || error.message.includes('LSP')) {
+          errorMessage = 'LSP server not ready or unavailable.';
+          this.logger.warning('Failure reason: LSP server issue');
+        } else if (error.message.includes('Invalid graph')) {
+          errorMessage = 'LSP extraction produced invalid graph.';
+          this.logger.warning('Failure reason: Invalid graph structure');
+        } else {
+          this.logger.warning(`Failure reason: ${error.message}`);
+        }
+      }
+      
+      // Show user notification with "Use Cargo" option
+      const selection = await this.errorHandler.showWarning(
+        `${errorMessage} Try cargo-based visualization?`,
+        'Use Cargo',
+        'Cancel'
+      );
+      
+      // Trigger cargo-based visualization if user accepts
+      if (selection === 'Use Cargo') {
+        this.logger.info('User accepted cargo fallback - switching to cargo-based visualization');
+        await this.visualizeScopeCargo(scopeType);
+      } else {
+        this.logger.info('User declined cargo fallback');
+      }
+    }
+  }
+
+  /**
+   * Visualize Hydro code using Cargo (complete path with backtraces)
+   * Compiles code and extracts runtime information including backtrace hierarchy
+   */
+  async visualizeScopeCargo(scopeType: ScopeType): Promise<void> {
+    this.logger.section(`Visualize ${scopeType} scope (Cargo)`);
     
     // Get active editor
     const editor = vscode.window.activeTextEditor;
@@ -209,6 +336,25 @@ export class HydroIDE {
       });
     } catch (error) {
       await this.errorHandler.handleError(error, `visualize${this.capitalize(scopeType)}`);
+    }
+  }
+
+  /**
+   * Visualize Hydro code at the specified scope
+   * Smart router that chooses between LSP and Cargo based on configuration
+   * Main entry point for visualization commands
+   */
+  async visualizeScope(scopeType: ScopeType): Promise<void> {
+    // Read default visualization mode from configuration
+    const defaultMode = this.configManager.getDefaultVisualizationMode();
+    
+    this.logger.info(`Using ${defaultMode} visualization mode (from configuration)`);
+    
+    // Route to appropriate visualization method
+    if (defaultMode === 'lsp') {
+      await this.visualizeScopeLSP(scopeType);
+    } else {
+      await this.visualizeScopeCargo(scopeType);
     }
   }
 

@@ -49,6 +49,36 @@
         "category": "Hydro"
       },
       {
+        "command": "hydro-ide.visualizeFunctionLSP",
+        "title": "Hydro: Visualize Function (LSP - Fast)",
+        "category": "Hydro"
+      },
+      {
+        "command": "hydro-ide.visualizeFileLSP",
+        "title": "Hydro: Visualize File (LSP - Fast)",
+        "category": "Hydro"
+      },
+      {
+        "command": "hydro-ide.visualizeWorkspaceLSP",
+        "title": "Hydro: Visualize Workspace (LSP - Fast)",
+        "category": "Hydro"
+      },
+      {
+        "command": "hydro-ide.visualizeFunctionCargo",
+        "title": "Hydro: Visualize Function (Cargo - Complete)",
+        "category": "Hydro"
+      },
+      {
+        "command": "hydro-ide.visualizeFileCargo",
+        "title": "Hydro: Visualize File (Cargo - Complete)",
+        "category": "Hydro"
+      },
+      {
+        "command": "hydro-ide.visualizeWorkspaceCargo",
+        "title": "Hydro: Visualize Workspace (Cargo - Complete)",
+        "category": "Hydro"
+      },
+      {
         "command": "hydro-ide.refresh",
         "title": "Hydro: Refresh Visualization",
         "category": "Hydro"
@@ -212,6 +242,34 @@
           "minimum": 100,
           "maximum": 30000,
           "description": "Timeout for LSP queries in milliseconds"
+        },
+        "hydroIde.visualization.defaultMode": {
+          "type": "string",
+          "enum": [
+            "lsp",
+            "cargo"
+          ],
+          "default": "lsp",
+          "description": "Default visualization mode (LSP for speed, Cargo for completeness with backtraces)"
+        },
+        "hydroIde.lsp.queryTimeout": {
+          "type": "number",
+          "default": 5000,
+          "minimum": 100,
+          "maximum": 30000,
+          "description": "Timeout for LSP queries in milliseconds"
+        },
+        "hydroIde.lsp.cacheSize": {
+          "type": "number",
+          "default": 50,
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Maximum number of cached LSP graph extractions"
+        },
+        "hydroIde.lsp.enableDegradedMode": {
+          "type": "boolean",
+          "default": true,
+          "description": "Allow partial visualization when LSP information is incomplete"
         },
         "hydroIde.logging.level": {
           "type": "string",

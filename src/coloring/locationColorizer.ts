@@ -5,9 +5,9 @@
  */
 
 import * as vscode from 'vscode';
-import * as locationAnalyzer from './locationAnalyzer';
+import * as locationAnalyzer from '../analysis/locationAnalyzer';
 import { getBorderStyle, getColorByIndex } from './locationColorizerConfig';
-import { showStatus } from './extension';
+import { showStatus } from '../extension';
 
 /**
  * Check if the current theme is dark

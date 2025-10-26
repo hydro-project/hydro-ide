@@ -2,8 +2,8 @@
  * Main exports for Hydro IDE extension
  */
 
-export { ScopeAnalyzer } from './scopeAnalyzer';
-export { CargoOrchestrator, CargoError } from './cargoOrchestrator';
+export { ScopeAnalyzer } from './analysis/scopeAnalyzer';
+export { CargoOrchestrator, CargoError } from './visualization/cargoOrchestrator';
 export {
   ScopeType,
   ScopeTarget,
@@ -13,4 +13,4 @@ export {
   ScopeAnalyzerConfig,
   CargoConfig,
   BuildResult,
-} from './types';
+} from './core/types';

@@ -401,6 +401,7 @@ suite('LSP Graph Extractor Integration Tests', () => {
       // This test helps debug the full pipeline with real rust-analyzer LSP
       
       // Wait for rust-analyzer to be ready
+      // eslint-disable-next-line no-console
       console.log('Waiting for rust-analyzer to be ready...');
       await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds for rust-analyzer to start
       
@@ -410,8 +411,10 @@ suite('LSP Graph Extractor Integration Tests', () => {
       
       try {
         realDocument = await vscode.workspace.openTextDocument(mapReducePath);
+        // eslint-disable-next-line no-console
         console.log(`Opened real document: ${realDocument.fileName}`);
       } catch (error) {
+        // eslint-disable-next-line no-console
         console.log(`Could not open real file, using mock: ${error}`);
         realDocument = mockDocument;
       }

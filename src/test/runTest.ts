@@ -26,7 +26,9 @@ async function main() {
     const [cliPath, ...args] = resolveCliArgsFromVSCodeExecutablePath(vscodeExecutablePath);
 
     // Install rust-analyzer extension
+    // eslint-disable-next-line no-console
     console.log('Installing rust-analyzer extension...');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { spawn } = require('child_process');
     await new Promise<void>((resolve, reject) => {
       const installProcess = spawn(cliPath, [...args, '--install-extension', 'rust-lang.rust-analyzer'], {
@@ -34,6 +36,7 @@ async function main() {
       });
       installProcess.on('close', (code: number) => {
         if (code === 0) {
+          // eslint-disable-next-line no-console
           console.log('rust-analyzer extension installed successfully');
           resolve();
         } else {

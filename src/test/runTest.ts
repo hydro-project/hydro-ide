@@ -5,7 +5,7 @@
  */
 
 import * as path from 'path';
-import { runTests } from '@vscode/test-electron';
+import { runTests, downloadAndUnzipVSCode, resolveCliArgsFromVSCodeExecutablePath } from '@vscode/test-electron';
 
 async function main() {
   try {
@@ -21,11 +21,33 @@ async function main() {
       '../../test-fixtures/sample-hydro-project'
     );
 
-    // Download VS Code, unzip it and run the integration test
+    // Download and install VSCode
+    const vscodeExecutablePath = await downloadAndUnzipVSCode('stable');
+    const [cliPath, ...args] = resolveCliArgsFromVSCodeExecutablePath(vscodeExecutablePath);
+
+    // Install rust-analyzer extension
+    console.log('Installing rust-analyzer extension...');
+    const { spawn } = require('child_process');
+    await new Promise<void>((resolve, reject) => {
+      const installProcess = spawn(cliPath, [...args, '--install-extension', 'rust-lang.rust-analyzer'], {
+        stdio: 'inherit'
+      });
+      installProcess.on('close', (code: number) => {
+        if (code === 0) {
+          console.log('rust-analyzer extension installed successfully');
+          resolve();
+        } else {
+          reject(new Error(`Failed to install rust-analyzer extension, exit code: ${code}`));
+        }
+      });
+    });
+
+    // Run the integration tests
     await runTests({
+      vscodeExecutablePath,
       extensionDevelopmentPath,
       extensionTestsPath,
-      launchArgs: [testWorkspace, '--disable-extensions'],
+      launchArgs: [testWorkspace],
     });
   } catch (err) {
     console.error('Failed to run tests:', err);

@@ -842,9 +842,16 @@ export class LSPGraphExtractor {
         // Only include Hydro dataflow operators
         if (returnType && !this.isValidDataflowOperator(tsOp.name, returnType)) {
           this.log(
-            `[findOperatorInfo] Filtered out ${tsOp.name} at line ${tsOp.line} due to non-dataflow type: ${returnType}`
+            `[findOperatorInfo] Filtered out ${tsOp.name} at line ${tsOp.line} - non-dataflow type: ${returnType}`
           );
           continue;
+        }
+        
+        // If no return type is available, log it but allow the operator through
+        if (!returnType) {
+          this.log(
+            `[findOperatorInfo] WARNING: ${tsOp.name} at line ${tsOp.line} has no return type information - including anyway`
+          );
         }
 
         return {
@@ -1129,7 +1136,14 @@ export class LSPGraphExtractor {
 
           // Skip operators that are not valid dataflow operators
           if (returnType && !this.isValidDataflowOperator(loc.operatorName, returnType)) {
+            this.log(`[buildOperatorChains] Filtered out ${loc.operatorName} - not a dataflow operator (return type: ${returnType})`);
             continue;
+          }
+          
+          // If no return type is available, log it but allow the operator through
+          // This handles cases where LSP isn't ready yet or type info is unavailable
+          if (!returnType) {
+            this.log(`[buildOperatorChains] WARNING: ${loc.operatorName} has no return type information - including anyway`);
           }
 
           chainOperators.push({

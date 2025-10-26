@@ -277,33 +277,30 @@ export class WebviewManager {
     this.isPanelVisible = this.panel.visible;
 
     // Set up panel disposal handler
-    this.panel.onDidDispose(
+    const disposeListener = this.panel.onDidDispose(
       () => {
         this.outputChannel.appendLine('[WebviewManager] Panel disposed');
         this.panel = undefined;
         this.currentState = undefined;
         this.isPanelVisible = false;
-      },
-      null,
-      this.disposables
+      }
     );
+    this.disposables.push(disposeListener);
 
     // Set up visibility change handler
-    this.panel.onDidChangeViewState(
+    const visibilityListener = this.panel.onDidChangeViewState(
       (e) => {
         this.isPanelVisible = e.webviewPanel.visible;
         this.outputChannel.appendLine(`[WebviewManager] Panel visibility changed: ${this.isPanelVisible}`);
-      },
-      null,
-      this.disposables
+      }
     );
+    this.disposables.push(visibilityListener);
 
     // Set up message handler
-    this.panel.webview.onDidReceiveMessage(
-      (message: WebviewToExtensionMessage) => this.handleWebviewMessage(message),
-      null,
-      this.disposables
+    const messageListener = this.panel.webview.onDidReceiveMessage(
+      (message: WebviewToExtensionMessage) => this.handleWebviewMessage(message)
     );
+    this.disposables.push(messageListener);
 
     // Set webview HTML content
     this.panel.webview.html = this.getWebviewContent(this.panel.webview);

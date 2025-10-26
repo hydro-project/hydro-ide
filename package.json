@@ -77,6 +77,16 @@
         "command": "hydro-ide.clearTypeCache",
         "title": "Hydro: Clear Type Cache",
         "category": "Hydro"
+      },
+      {
+        "command": "hydro-ide.showCacheStats",
+        "title": "Hydro: Show Cache Statistics",
+        "category": "Hydro"
+      },
+      {
+        "command": "hydro-ide.clearCache",
+        "title": "Hydro: Clear Analysis Cache",
+        "category": "Hydro"
       }
     ],
     "menus": {
@@ -158,6 +168,66 @@
           "type": "boolean",
           "default": true,
           "description": "Show warning when visualizing large graphs"
+        },
+        "hydroIde.analysis.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable location analysis and colorization"
+        },
+        "hydroIde.analysis.debounceDelay": {
+          "type": "number",
+          "default": 500,
+          "minimum": 0,
+          "maximum": 5000,
+          "description": "Delay in milliseconds before analyzing after typing stops"
+        },
+        "hydroIde.analysis.analyzeOnType": {
+          "type": "boolean",
+          "default": true,
+          "description": "Analyze document while typing (with debounce)"
+        },
+        "hydroIde.analysis.analyzeOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Analyze document immediately on save"
+        },
+        "hydroIde.analysis.maxFileSize": {
+          "type": "number",
+          "default": 10000,
+          "minimum": 100,
+          "maximum": 100000,
+          "description": "Maximum file size in lines to analyze"
+        },
+
+        "hydroIde.performance.cacheSize": {
+          "type": "number",
+          "default": 50,
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Maximum number of cached analysis results"
+        },
+        "hydroIde.performance.queryTimeout": {
+          "type": "number",
+          "default": 5000,
+          "minimum": 100,
+          "maximum": 30000,
+          "description": "Timeout for LSP queries in milliseconds"
+        },
+        "hydroIde.logging.level": {
+          "type": "string",
+          "enum": [
+            "error",
+            "warn",
+            "info",
+            "debug"
+          ],
+          "default": "info",
+          "description": "Logging level for extension output"
+        },
+        "hydroIde.logging.showTimings": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show timing information in logs"
         }
       }
     }

@@ -7,6 +7,7 @@
 import * as vscode from 'vscode';
 import * as locationAnalyzer from './locationAnalyzer';
 import { getBorderStyle, getColorByIndex } from './locationColorizerConfig';
+import { showStatus } from './extension';
 
 /**
  * Check if the current theme is dark
@@ -41,6 +42,8 @@ export function initializeDecorationTypes(channel?: vscode.OutputChannel): void 
   decorationTypesByLocation.clear();
 }
 
+
+
 /**
  * Get or create a decoration type for a specific location
  * Theme-aware: uses appropriate colors and borders for light/dark themes
@@ -51,9 +54,15 @@ function getDecorationForLocation(
 ): vscode.TextEditorDecorationType {
   if (!decorationTypesByLocation.has(locationKind)) {
     const isDark = isDarkTheme();
+    
+    // Get color from palette
+    const backgroundColor = getColorByIndex(colorIndex, isDark);
+    
+    // Get border style (this handles Process/Cluster/External differences)
     const borderStyle = getBorderStyle(locationKind, isDark);
+    
     const decorationType = vscode.window.createTextEditorDecorationType({
-      backgroundColor: getColorByIndex(colorIndex, isDark),
+      backgroundColor,
       ...borderStyle,
     });
     decorationTypesByLocation.set(locationKind, decorationType);
@@ -107,8 +116,8 @@ function applyDecorations(
 export async function colorizeFile(editor: vscode.TextEditor): Promise<void> {
   const document = editor.document;
 
-  // Show status immediately
-  vscode.window.setStatusBarMessage('$(sync~spin) Colorizing locations...', 10000);
+  // Show analyzing status
+  showStatus('$(sync~spin) Analyzing locations...', false);
 
   try {
     // Don't show output channel - user can open it manually if needed
@@ -122,6 +131,8 @@ export async function colorizeFile(editor: vscode.TextEditor): Promise<void> {
     if (locationInfos.length === 0) {
       log('No Hydro operators with Location types found.');
       log(`========================================`);
+      // Show ready status with auto-hide
+      showStatus('$(check) Locations ready', true);
       return;
     }
 
@@ -140,6 +151,9 @@ export async function colorizeFile(editor: vscode.TextEditor): Promise<void> {
 
     log(`Colorized ${locationInfos.length} identifiers: ${summary}`);
     log(`========================================`);
+    
+    // Show ready status with auto-hide
+    showStatus('$(check) Locations ready', true);
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     log(`ERROR during colorization: ${errorMsg}`);
@@ -147,6 +161,9 @@ export async function colorizeFile(editor: vscode.TextEditor): Promise<void> {
       log(`Stack trace: ${error.stack}`);
     }
     log(`========================================`);
+    
+    // Show error status with auto-hide
+    showStatus('$(error) Analysis failed', true);
   }
 }
 

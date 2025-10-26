@@ -27,6 +27,68 @@ export interface LocationInfo {
 }
 
 /**
+ * Cache entry for storing analysis results
+ * 
+ * Each entry stores the complete analysis results for a document at a specific version.
+ * The version number is critical for cache invalidation - when a document is edited,
+ * its version increments, causing cache misses until re-analysis completes.
+ */
+interface CacheEntry {
+  /** Analysis results for the document */
+  locations: LocationInfo[];
+  /** Document version when analysis was performed */
+  version: number;
+  /** Timestamp when the entry was created (for debugging and future TTL support) */
+  timestamp: number;
+}
+
+/**
+ * Module-level cache for analysis results
+ * 
+ * CACHE IMPLEMENTATION:
+ * - Uses a Map for O(1) lookup by document URI
+ * - Key: document URI string (e.g., "file:///path/to/file.rs")
+ * - Value: CacheEntry with locations, version, and timestamp
+ * - Cache is version-aware: entries are only valid if document version matches
+ * - Cache is bounded by size limit (default 50 entries) with LRU eviction
+ * 
+ * CACHE INVALIDATION:
+ * - Automatic: When document version changes (on edit), getCached() returns null
+ * - Manual: clearCache() can clear specific file or entire cache
+ * - Timed: Entries for closed documents are cleared after 60 seconds (in extension.ts)
+ */
+const cache = new Map<string, CacheEntry>();
+
+/**
+ * LRU (Least Recently Used) order tracking array
+ * 
+ * LRU EVICTION ALGORITHM:
+ * - Array maintains document URIs in order of access (oldest first, newest last)
+ * - On cache hit: URI is moved to end of array (most recently used)
+ * - On cache set: URI is added to end of array
+ * - On eviction: First URI in array is removed (least recently used)
+ * - This ensures frequently accessed files stay in cache while old files are evicted
+ * 
+ * COMPLEXITY:
+ * - Access: O(n) for finding URI in array, but n is small (max 50-500 entries)
+ * - Eviction: O(1) for removing first element
+ * - This simple approach is sufficient for the expected cache sizes
+ */
+const lruOrder: string[] = [];
+
+/**
+ * Cache statistics counters
+ * 
+ * Used for monitoring cache effectiveness:
+ * - cacheHits: Number of times cached results were used (avoided re-analysis)
+ * - cacheMisses: Number of times analysis was required (no valid cache entry)
+ * - Hit rate = hits / (hits + misses) indicates cache effectiveness
+ * - Target hit rate: >50% for typical editing workflows
+ */
+let cacheHits = 0;
+let cacheMisses = 0;
+
+/**
  * Initialize the analyzer with an output channel
  */
 export function initialize(channel?: vscode.OutputChannel): void {
@@ -56,7 +118,13 @@ function log(message: string): void {
  * - "Stream<(String, i32), Tick<Process<'a, Leader>>, Bounded::UnderlyingBound, ...>" -> "Tick<Process<Leader>>"
  */
 function parseLocationType(fullType: string): string | null {
-  let unwrapped = fullType;
+  try {
+    // Validate input is not null/undefined/empty
+    if (!fullType || typeof fullType !== 'string' || fullType.length === 0) {
+      return null;
+    }
+
+    let unwrapped = fullType;
 
   // Remove leading & or &mut
   unwrapped = unwrapped.replace(/^&(?:mut\s+)?/, '');
@@ -123,6 +191,15 @@ function parseLocationType(fullType: string): string | null {
   }
 
   return null;
+  } catch (error) {
+    // Handle malformed type strings gracefully
+    if (error instanceof Error) {
+      log(`WARNING: Error parsing location type from '${fullType}': ${error.message}`);
+    } else {
+      log(`WARNING: Unknown error parsing location type: ${String(error)}`);
+    }
+    return null;
+  }
 }
 
 /**
@@ -131,39 +208,77 @@ function parseLocationType(fullType: string): string | null {
  * Example: "(String, i32), Process<'a, Leader>" -> ["(String, i32)", "Process<'a, Leader>"]
  */
 function parseTypeParameters(params: string): string[] {
-  const result: string[] = [];
-  let current = '';
-  let angleDepth = 0;
-  let parenDepth = 0;
-
-  for (let i = 0; i < params.length; i++) {
-    const char = params[i];
-
-    if (char === '<') {
-      angleDepth++;
-      current += char;
-    } else if (char === '>') {
-      angleDepth--;
-      current += char;
-    } else if (char === '(') {
-      parenDepth++;
-      current += char;
-    } else if (char === ')') {
-      parenDepth--;
-      current += char;
-    } else if (char === ',' && angleDepth === 0 && parenDepth === 0) {
-      result.push(current.trim());
-      current = '';
-    } else {
-      current += char;
+  try {
+    // Validate input
+    if (!params || typeof params !== 'string') {
+      return [];
     }
-  }
 
-  if (current.trim()) {
-    result.push(current.trim());
-  }
+    const result: string[] = [];
+    let current = '';
+    let angleDepth = 0;
+    let parenDepth = 0;
 
-  return result;
+    for (let i = 0; i < params.length; i++) {
+      const char = params[i];
+
+      if (char === '<') {
+        angleDepth++;
+        current += char;
+      } else if (char === '>') {
+        angleDepth--;
+        current += char;
+        
+        // Validate bracket matching
+        if (angleDepth < 0) {
+          log(`WARNING: Mismatched angle brackets in type parameters: ${params}`);
+          angleDepth = 0; // Reset to prevent further issues
+        }
+      } else if (char === '(') {
+        parenDepth++;
+        current += char;
+      } else if (char === ')') {
+        parenDepth--;
+        current += char;
+        
+        // Validate parenthesis matching
+        if (parenDepth < 0) {
+          log(`WARNING: Mismatched parentheses in type parameters: ${params}`);
+          parenDepth = 0; // Reset to prevent further issues
+        }
+      } else if (char === ',' && angleDepth === 0 && parenDepth === 0) {
+        const trimmed = current.trim();
+        if (trimmed) {
+          result.push(trimmed);
+        }
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+
+    const trimmed = current.trim();
+    if (trimmed) {
+      result.push(trimmed);
+    }
+
+    // Warn about unclosed brackets/parentheses
+    if (angleDepth !== 0) {
+      log(`WARNING: Unclosed angle brackets in type parameters: ${params} (depth: ${angleDepth})`);
+    }
+    if (parenDepth !== 0) {
+      log(`WARNING: Unclosed parentheses in type parameters: ${params} (depth: ${parenDepth})`);
+    }
+
+    return result;
+  } catch (error) {
+    if (error instanceof Error) {
+      log(`WARNING: Error parsing type parameters from '${params}': ${error.message}`);
+    } else {
+      log(`WARNING: Unknown error parsing type parameters: ${String(error)}`);
+    }
+    return [];
+  }
 }
 
 /**
@@ -173,36 +288,65 @@ function parseTypeParameters(params: string): string[] {
 async function getTypeAtPosition(
   document: vscode.TextDocument,
   position: vscode.Position,
-  isMethod: boolean = false
+  isMethod: boolean = false,
+  timeout: number = 5000
 ): Promise<string | null> {
   try {
+    // Validate document is not null/undefined
+    if (!document) {
+      log('  ERROR: Document is null or undefined');
+      return null;
+    }
+
+    // Validate position is not null/undefined
+    if (!position) {
+      log('  ERROR: Position is null or undefined');
+      return null;
+    }
+
     // Validate position is within document bounds
-    if (position.line >= document.lineCount) {
+    if (position.line < 0 || position.line >= document.lineCount) {
       log(
-        `  ERROR: Position line ${position.line} exceeds document line count ${document.lineCount}`
+        `  WARNING: Position line ${position.line} is out of bounds (document has ${document.lineCount} lines)`
       );
       return null;
     }
 
     const line = document.lineAt(position.line);
-    if (position.character >= line.text.length) {
-      log(`  ERROR: Position char ${position.character} exceeds line length ${line.text.length}`);
+    if (position.character < 0 || position.character > line.text.length) {
+      log(`  WARNING: Position char ${position.character} is out of bounds (line length: ${line.text.length})`);
       return null;
     }
 
-    const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
+    const hoverPromise = vscode.commands.executeCommand<vscode.Hover[]>(
       'vscode.executeHoverProvider',
       document.uri,
       position
     );
+    
+    const hovers = await Promise.race([
+      hoverPromise,
+      createTimeout(timeout, 'getTypeAtPosition')
+    ]);
 
+    // Check for null/undefined hover response
     if (!hovers || hovers.length === 0) {
       return null;
     }
 
     // Extract type information from hover content
     for (const hover of hovers) {
+      // Validate hover has contents
+      if (!hover || !hover.contents) {
+        continue;
+      }
+
       for (const content of hover.contents) {
+        // Validate content is not null/undefined
+        if (!content) {
+          continue;
+        }
+
         const contentStr = typeof content === 'string' ? content : content.value;
         if (contentStr) {
           if (isMethod) {
@@ -213,7 +357,14 @@ async function getTypeAtPosition(
               // Look for "pub fn method_name(...) -> ReturnType"
               const returnTypeMatch = blockText.match(/->\s*([^\n{]+?)(?:\s*where|\s*$)/s);
               if (returnTypeMatch) {
-                let returnType = returnTypeMatch[1].replace(/\s+/g, ' ').trim();
+                let returnType = returnTypeMatch[1]?.replace(/\s+/g, ' ').trim();
+                
+                // Validate return type is not empty or malformed
+                if (!returnType || returnType.length === 0) {
+                  log('  WARNING: Empty return type extracted from hover');
+                  continue;
+                }
+                
                 log(`  Initial return type: ${returnType}`);
 
                 // Extract where clause once for reuse
@@ -344,13 +495,27 @@ async function getTypeAtPosition(
             // For variables/parameters, extract type from first code block (e.g., "p1: &Process<'a, P1>")
             const typeMatch = contentStr.match(/```rust\n([^`]+)\n```/);
             if (typeMatch) {
-              const fullDecl = typeMatch[1].trim();
+              const fullDecl = typeMatch[1]?.trim();
+              
+              // Validate declaration is not empty
+              if (!fullDecl || fullDecl.length === 0) {
+                log('  WARNING: Empty declaration extracted from hover');
+                continue;
+              }
+              
               log(`  Variable/parameter declaration: ${fullDecl}`);
 
               // Extract just the type part after the colon
               const colonMatch = fullDecl.match(/:\s*(.+)$/);
               if (colonMatch) {
-                const varType = colonMatch[1].trim();
+                const varType = colonMatch[1]?.trim();
+                
+                // Validate type is not empty
+                if (!varType || varType.length === 0) {
+                  log('  WARNING: Empty variable type extracted');
+                  return fullDecl;
+                }
+                
                 log(`  Extracted variable type: ${varType}`);
                 return varType;
               }
@@ -364,25 +529,98 @@ async function getTypeAtPosition(
 
     return null;
   } catch (error) {
-    log(`ERROR querying hover: ${error}`);
+    // Classify and log errors with appropriate severity
+    if (error instanceof Error) {
+      if (error.message.includes('timed out')) {
+        // Timeout is a transient error - log as warning
+        log(`  WARNING: Hover query timed out after ${timeout}ms`);
+      } else if (error.message.includes('not ready') || error.message.includes('not available')) {
+        // rust-analyzer not ready - log as info
+        log(`  INFO: rust-analyzer not ready for hover query`);
+      } else {
+        // Other errors - log as error with details
+        log(`  ERROR querying hover: ${error.message}`);
+        if (error.stack) {
+          log(`  Stack trace: ${error.stack}`);
+        }
+      }
+    } else {
+      // Non-Error exceptions
+      log(`  ERROR querying hover (unknown error type): ${String(error)}`);
+    }
     return null;
   }
 }
 
 /**
- * Get semantic tokens from rust-analyzer
+ * Create a timeout promise that rejects after the specified duration
+ */
+function createTimeout(ms: number, operation: string): Promise<never> {
+  return new Promise((_, reject) => {
+    setTimeout(() => {
+      reject(new Error(`${operation} timed out after ${ms}ms`));
+    }, ms);
+  });
+}
+
+/**
+ * Get semantic tokens from rust-analyzer with timeout
  */
 async function getSemanticTokens(
-  document: vscode.TextDocument
+  document: vscode.TextDocument,
+  timeout: number
 ): Promise<vscode.SemanticTokens | null> {
   try {
-    const tokens = await vscode.commands.executeCommand<vscode.SemanticTokens>(
+    // Validate document is not null/undefined
+    if (!document || !document.uri) {
+      log('ERROR: Document or document URI is null or undefined');
+      return null;
+    }
+
+    const tokensPromise = vscode.commands.executeCommand<vscode.SemanticTokens>(
       'vscode.provideDocumentSemanticTokens',
       document.uri
     );
-    return tokens || null;
+    
+    const tokens = await Promise.race([
+      tokensPromise,
+      createTimeout(timeout, 'getSemanticTokens')
+    ]);
+    
+    // Validate tokens structure
+    if (!tokens) {
+      return null;
+    }
+    
+    if (!tokens.data || !Array.isArray(tokens.data)) {
+      log('WARNING: Semantic tokens returned but data is invalid or missing');
+      return null;
+    }
+    
+    return tokens;
   } catch (error) {
-    log(`ERROR getting semantic tokens: ${error}`);
+    // Classify and log errors with appropriate severity
+    if (error instanceof Error) {
+      if (error.message.includes('timed out')) {
+        // Timeout is a transient error - log as warning
+        log(`WARNING: Semantic tokens query timed out after ${timeout}ms`);
+      } else if (error.message.includes('not ready') || error.message.includes('not available')) {
+        // rust-analyzer not ready - log as info
+        log(`INFO: rust-analyzer not ready for semantic tokens query`);
+      } else if (error.message.includes('command') && error.message.includes('not found')) {
+        // Command not found - rust-analyzer may not be installed
+        log(`ERROR: Semantic tokens command not found. rust-analyzer may not be installed or enabled.`);
+      } else {
+        // Other errors - log as error with details
+        log(`ERROR getting semantic tokens: ${error.message}`);
+        if (error.stack) {
+          log(`Stack trace: ${error.stack}`);
+        }
+      }
+    } else {
+      // Non-Error exceptions
+      log(`ERROR getting semantic tokens (unknown error type): ${String(error)}`);
+    }
     return null;
   }
 }
@@ -391,18 +629,67 @@ async function getSemanticTokens(
  * Analyze a document to find all identifiers with Location types
  */
 export async function analyzeDocument(document: vscode.TextDocument): Promise<LocationInfo[]> {
-  log(`Analyzing ${document.fileName}...`);
-  log(`Document has ${document.lineCount} lines`);
-  const startTime = Date.now();
+  try {
+    // Validate document is not null/undefined
+    if (!document) {
+      log('ERROR: Document is null or undefined');
+      return [];
+    }
 
-  // Get semantic tokens to find all identifiers
-  const tokens = await getSemanticTokens(document);
-  if (!tokens) {
-    log('ERROR: No semantic tokens available. rust-analyzer may not be ready.');
-    return [];
-  }
+    // Validate document has required properties
+    if (!document.uri || !document.fileName) {
+      log('ERROR: Document is missing required properties (uri or fileName)');
+      return [];
+    }
 
-  log(`Got ${tokens.data.length / 5} semantic tokens`);
+    log(`Analyzing ${document.fileName}...`);
+    log(`Document has ${document.lineCount} lines, version ${document.version}`);
+    
+    // Read configuration
+    const config = vscode.workspace.getConfiguration('hydro-ide');
+    
+    // Check if analysis is enabled
+    const enabled = config.get<boolean>('analysis.enabled', true);
+    if (!enabled) {
+      log('INFO: Analysis is disabled in configuration');
+      return [];
+    }
+    
+    // Check file size limit
+    const maxFileSize = config.get<number>('analysis.maxFileSize', 10000);
+    if (document.lineCount > maxFileSize) {
+      log(`INFO: Skipping analysis - file too large (${document.lineCount} lines > ${maxFileSize} max)`);
+      return [];
+    }
+    
+    // Check cache first
+    const uri = document.uri.toString();
+    const cached = getCached(uri, document.version);
+    if (cached) {
+      log(`Cache hit for ${document.fileName} v${document.version} (${cached.length} locations)`);
+      return cached;
+    }
+    
+    log(`Cache miss for ${document.fileName} v${document.version}, analyzing...`);
+    const startTime = Date.now();
+
+    // Get query timeout from configuration
+    const queryTimeout = config.get<number>('performance.queryTimeout', 5000);
+
+    // Get semantic tokens to find all identifiers
+    const tokens = await getSemanticTokens(document, queryTimeout);
+    if (!tokens) {
+      log('WARNING: No semantic tokens available. rust-analyzer may not be ready or file may not be valid Rust code.');
+      return [];
+    }
+
+    // Validate tokens data
+    if (!tokens.data || tokens.data.length === 0) {
+      log('INFO: No semantic tokens data available for this document');
+      return [];
+    }
+
+    log(`Got ${tokens.data.length / 5} semantic tokens`);
 
   const locationInfos: LocationInfo[] = [];
   const seenPositions = new Set<string>();
@@ -416,70 +703,104 @@ export async function analyzeDocument(document: vscode.TextDocument): Promise<Lo
   let foundLocationCount = 0;
 
   for (let i = 0; i < data.length; i += 5) {
-    const deltaLine = data[i];
-    const deltaChar = data[i + 1];
-    const length = data[i + 2];
-    const tokenType = data[i + 3];
+    try {
+      // Validate we have enough data for a complete token
+      if (i + 4 >= data.length) {
+        log(`WARNING: Incomplete token data at index ${i}`);
+        break;
+      }
 
-    // Update position
-    line += deltaLine;
-    char = deltaLine === 0 ? char + deltaChar : deltaChar;
+      const deltaLine = data[i];
+      const deltaChar = data[i + 1];
+      const length = data[i + 2];
+      const tokenType = data[i + 3];
 
-    // Skip tokens beyond document bounds (stale semantic tokens)
-    if (line >= document.lineCount) {
+      // Validate token data values
+      if (deltaLine < 0 || deltaChar < 0 || length <= 0) {
+        log(`WARNING: Invalid token data at index ${i}: deltaLine=${deltaLine}, deltaChar=${deltaChar}, length=${length}`);
+        continue;
+      }
+
+      // Update position
+      line += deltaLine;
+      char = deltaLine === 0 ? char + deltaChar : deltaChar;
+
+      // Skip tokens beyond document bounds (stale semantic tokens)
+      if (line < 0 || line >= document.lineCount) {
+        continue;
+      }
+
+      // We're interested in: 8=variable (includes methods), 12=parameter, 17=local variable/binding
+      // Note: rust-analyzer uses type 12 for function parameters, not 7
+      const isRelevant = tokenType === 8 || tokenType === 12 || tokenType === 17;
+      if (!isRelevant) {
+        continue;
+      }
+
+      const position = new vscode.Position(line, char);
+      const range = new vscode.Range(line, char, line, char + length);
+      
+      // Validate range is within document bounds
+      if (range.end.character > document.lineAt(line).text.length) {
+        log(`WARNING: Token range extends beyond line length at line ${line}`);
+        continue;
+      }
+
+      const name = document.getText(range);
+
+      // Validate name is not empty
+      if (!name || name.length === 0) {
+        continue;
+      }
+
+      candidateCount++;
+
+      // Skip macros
+      if (name === '!' || name.endsWith('!')) {
+        continue;
+      }
+
+      // Skip if we've already checked this position
+      const posKey = `${line}:${char}`;
+      if (seenPositions.has(posKey)) {
+        continue;
+      }
+      seenPositions.add(posKey);
+
+      // Query the type at this position
+      queriedCount++;
+
+      // Check if this is a method call (preceded by '.')
+      const lineText = document.lineAt(position.line).text;
+      const charBefore = position.character > 0 ? lineText[position.character - 1] : '';
+      const isMethodCall = charBefore === '.';
+
+      // Hover on the method name itself to get the signature with return type
+      const typeInfo = await getTypeAtPosition(document, position, isMethodCall, queryTimeout);
+
+      if (!typeInfo) {
+        continue;
+      }
+
+      // Check if it contains a Location type
+      const locationKind = parseLocationType(typeInfo);
+      if (locationKind && !locationKind.includes('…')) {
+        foundLocationCount++;
+        locationInfos.push({
+          locationType: typeInfo,
+          locationKind,
+          range,
+          operatorName: name,
+        });
+      }
+    } catch (error) {
+      // Log error but continue processing other tokens
+      if (error instanceof Error) {
+        log(`WARNING: Error processing token at index ${i}: ${error.message}`);
+      } else {
+        log(`WARNING: Unknown error processing token at index ${i}: ${String(error)}`);
+      }
       continue;
-    }
-
-    // We're interested in: 8=variable (includes methods), 12=parameter, 17=local variable/binding
-    // Note: rust-analyzer uses type 12 for function parameters, not 7
-    const isRelevant = tokenType === 8 || tokenType === 12 || tokenType === 17;
-    if (!isRelevant) {
-      continue;
-    }
-
-    const position = new vscode.Position(line, char);
-    const range = new vscode.Range(line, char, line, char + length);
-    const name = document.getText(range);
-
-    candidateCount++;
-
-    // Skip macros
-    if (name === '!' || name.endsWith('!')) {
-      continue;
-    }
-
-    // Skip if we've already checked this position
-    const posKey = `${line}:${char}`;
-    if (seenPositions.has(posKey)) {
-      continue;
-    }
-    seenPositions.add(posKey);
-
-    // Query the type at this position
-    queriedCount++;
-
-    // Check if this is a method call (preceded by '.')
-    const lineText = document.lineAt(position.line).text;
-    const charBefore = position.character > 0 ? lineText[position.character - 1] : '';
-    const isMethodCall = charBefore === '.';
-
-    // Hover on the method name itself to get the signature with return type
-    const typeInfo = await getTypeAtPosition(document, position, isMethodCall);
-
-    if (!typeInfo) {
-      continue;
-    }
-
-    // Check if it contains a Location type
-    const locationKind = parseLocationType(typeInfo);
-    if (locationKind && !locationKind.includes('…')) {
-      foundLocationCount++;
-      locationInfos.push({
-        locationType: typeInfo,
-        locationKind,
-        range,
-        operatorName: name,
-      });
     }
   }
 
@@ -488,73 +809,280 @@ export async function analyzeDocument(document: vscode.TextDocument): Promise<Lo
   );
 
   // Find struct definitions for the Location type parameters
-  const structNames = new Set<string>();
-  locationInfos.forEach((info) => {
-    const match = info.locationKind.match(/<([^>]+)>$/);
-    if (match) {
-      structNames.add(match[1].trim());
-    }
-  });
+  try {
+    const structNames = new Set<string>();
+    locationInfos.forEach((info) => {
+      try {
+        const match = info.locationKind.match(/<([^>]+)>$/);
+        if (match && match[1]) {
+          structNames.add(match[1].trim());
+        }
+      } catch (error) {
+        log(`WARNING: Error extracting struct name from locationKind: ${info.locationKind}`);
+      }
+    });
 
-  // Search for struct definitions in the file
-  for (const structName of structNames) {
-    const pattern = new RegExp(`\\bstruct\\s+${structName}\\b`);
+    // Search for struct definitions in the file
+    for (const structName of structNames) {
+      try {
+        // Validate struct name is not empty
+        if (!structName || structName.length === 0) {
+          continue;
+        }
 
-    for (let lineNum = 0; lineNum < document.lineCount; lineNum++) {
-      const line = document.lineAt(lineNum);
-      const match = pattern.exec(line.text);
+        const pattern = new RegExp(`\\bstruct\\s+${structName}\\b`);
 
-      if (match) {
-        const structKeywordMatch = line.text.match(/\bstruct\s+/);
-        if (structKeywordMatch) {
-          const structNameStart = structKeywordMatch.index! + structKeywordMatch[0].length;
-          const structRange = new vscode.Range(
-            lineNum,
-            structNameStart,
-            lineNum,
-            structNameStart + structName.length
-          );
+        for (let lineNum = 0; lineNum < document.lineCount; lineNum++) {
+          const line = document.lineAt(lineNum);
+          const match = pattern.exec(line.text);
 
-          // Find which location kind this struct belongs to
-          const locationKind = locationInfos.find((info) =>
-            info.locationKind.includes(`<${structName}>`)
-          )?.locationKind;
+          if (match) {
+            const structKeywordMatch = line.text.match(/\bstruct\s+/);
+            if (structKeywordMatch && structKeywordMatch.index !== undefined) {
+              const structNameStart = structKeywordMatch.index + structKeywordMatch[0].length;
+              const structRange = new vscode.Range(
+                lineNum,
+                structNameStart,
+                lineNum,
+                structNameStart + structName.length
+              );
 
-          if (locationKind) {
-            locationInfos.push({
-              locationType: locationKind,
-              locationKind,
-              range: structRange,
-              operatorName: structName,
-            });
+              // Find which location kind this struct belongs to
+              const locationKind = locationInfos.find((info) =>
+                info.locationKind.includes(`<${structName}>`)
+              )?.locationKind;
+
+              if (locationKind) {
+                locationInfos.push({
+                  locationType: locationKind,
+                  locationKind,
+                  range: structRange,
+                  operatorName: structName,
+                });
+              }
+            }
+            break;
           }
         }
-        break;
+      } catch (error) {
+        if (error instanceof Error) {
+          log(`WARNING: Error searching for struct definition '${structName}': ${error.message}`);
+        } else {
+          log(`WARNING: Unknown error searching for struct '${structName}': ${String(error)}`);
+        }
       }
     }
+  } catch (error) {
+    if (error instanceof Error) {
+      log(`WARNING: Error finding struct definitions: ${error.message}`);
+    } else {
+      log(`WARNING: Unknown error finding struct definitions: ${String(error)}`);
+    }
+    // Continue with partial results
   }
 
   const elapsedMs = Date.now() - startTime;
   log(`Found ${locationInfos.length} location-typed identifiers in ${elapsedMs}ms`);
 
+  // Store results in cache
+  try {
+    setCached(uri, document.version, locationInfos);
+    log(`Cached results for ${document.fileName} v${document.version}`);
+  } catch (error) {
+    if (error instanceof Error) {
+      log(`WARNING: Failed to cache results: ${error.message}`);
+    } else {
+      log(`WARNING: Failed to cache results: ${String(error)}`);
+    }
+    // Continue even if caching fails
+  }
+
   return locationInfos;
+  } catch (error) {
+    // Top-level error handler for the entire analysis function
+    if (error instanceof Error) {
+      log(`ERROR: Analysis failed for ${document.fileName}: ${error.message}`);
+      if (error.stack) {
+        log(`Stack trace: ${error.stack}`);
+      }
+    } else {
+      log(`ERROR: Analysis failed with unknown error type: ${String(error)}`);
+    }
+    // Return empty array on error rather than throwing
+    return [];
+  }
 }
 
 /**
- * Get cache statistics (no-op in simple version)
+ * Retrieve cached analysis results for a document
+ * 
+ * CACHE LOOKUP LOGIC:
+ * 1. Check if entry exists in cache Map (O(1) lookup)
+ * 2. Verify document version matches cached version (version-based invalidation)
+ * 3. On cache hit:
+ *    - Update LRU order (move URI to end of array = most recently used)
+ *    - Increment hit counter
+ *    - Return cached locations (avoids expensive re-analysis)
+ * 4. On cache miss:
+ *    - Increment miss counter
+ *    - Return null (caller will perform analysis and cache results)
+ * 
+ * VERSION-BASED INVALIDATION:
+ * - VSCode increments document.version on each edit
+ * - If cached version != current version, cache is stale and miss is returned
+ * - This ensures we never return outdated analysis results
+ * 
+ * @param uri Document URI string (e.g., "file:///path/to/file.rs")
+ * @param version Document version number (from document.version)
+ * @returns Cached locations if found and version matches, null otherwise
+ */
+function getCached(uri: string, version: number): LocationInfo[] | null {
+  const entry = cache.get(uri);
+  if (entry && entry.version === version) {
+    // CACHE HIT: Entry exists and version matches
+    
+    // Update LRU order: move this URI to end (most recently used)
+    // This prevents frequently accessed files from being evicted
+    const idx = lruOrder.indexOf(uri);
+    if (idx >= 0) {
+      lruOrder.splice(idx, 1); // Remove from current position
+    }
+    lruOrder.push(uri); // Add to end (most recently used)
+    
+    cacheHits++;
+    return entry.locations;
+  }
+  
+  // CACHE MISS: Entry doesn't exist or version doesn't match
+  cacheMisses++;
+  return null;
+}
+
+/**
+ * Store analysis results in cache with LRU eviction
+ * 
+ * CACHE STORAGE LOGIC:
+ * 1. Read cache size limit from configuration (default: 50 entries)
+ * 2. If cache is at capacity, evict least recently used entries
+ * 3. Store new entry in cache Map
+ * 4. Update LRU order array
+ * 
+ * LRU EVICTION ALGORITHM:
+ * - When cache.size >= maxSize, evict entries until there's room
+ * - Eviction: Remove first URI from lruOrder array (least recently used)
+ * - Delete corresponding entry from cache Map
+ * - This ensures cache never exceeds configured size limit
+ * - Frequently accessed files stay in cache, old files are evicted
+ * 
+ * EXAMPLE:
+ * - maxSize = 3, cache has [file1, file2, file3] (oldest to newest)
+ * - User accesses file2 -> moves to end: [file1, file3, file2]
+ * - User opens file4 -> evicts file1: [file3, file2, file4]
+ * - file1 is evicted because it was least recently used
+ * 
+ * @param uri Document URI string (e.g., "file:///path/to/file.rs")
+ * @param version Document version number (from document.version)
+ * @param locations Analysis results to cache
+ */
+function setCached(uri: string, version: number, locations: LocationInfo[]): void {
+  // Read cache size limit from user configuration
+  const config = vscode.workspace.getConfiguration('hydro-ide');
+  const maxSize = config.get<number>('performance.cacheSize', 50);
+  
+  // LRU EVICTION: Remove oldest entries if cache is at capacity
+  // Loop handles case where multiple entries need eviction (shouldn't happen normally)
+  while (cache.size >= maxSize && lruOrder.length > 0) {
+    // Remove first element from LRU array (least recently used)
+    const oldest = lruOrder.shift()!;
+    
+    // Delete corresponding cache entry
+    cache.delete(oldest);
+    
+    log(`Evicted cache entry for ${oldest} (LRU)`);
+  }
+  
+  // Store new entry in cache
+  cache.set(uri, { locations, version, timestamp: Date.now() });
+  
+  // Update LRU order: add URI to end (most recently used)
+  // First remove if it already exists (handles re-caching same file)
+  const idx = lruOrder.indexOf(uri);
+  if (idx >= 0) {
+    lruOrder.splice(idx, 1); // Remove from current position
+  }
+  lruOrder.push(uri); // Add to end (most recently used)
+}
+
+/**
+ * Clear cache entries
+ * 
+ * CACHE INVALIDATION:
+ * - Selective: Clear specific file (used when file is closed or saved)
+ * - Complete: Clear entire cache (used on configuration changes or manual clear)
+ * 
+ * WHEN TO CLEAR CACHE:
+ * - File closed: After 60 seconds (in extension.ts)
+ * - File saved: Immediately (to get fresh types from rust-analyzer)
+ * - Configuration changed: Colors or analysis settings changed
+ * - Manual: User runs "Clear Analysis Cache" command
+ * - Extension deactivation: Clean up all resources
+ * 
+ * @param fileUri Optional specific file URI to clear. If not provided, clears entire cache
+ */
+export function clearCache(fileUri?: string): void {
+  if (fileUri) {
+    // SELECTIVE CLEAR: Remove specific file from cache
+    cache.delete(fileUri);
+    
+    // Remove from LRU order array
+    const idx = lruOrder.indexOf(fileUri);
+    if (idx >= 0) {
+      lruOrder.splice(idx, 1);
+    }
+    
+    log(`Cleared cache for ${fileUri}`);
+  } else {
+    // COMPLETE CLEAR: Remove all entries and reset statistics
+    cache.clear();
+    lruOrder.length = 0; // Clear array efficiently
+    cacheHits = 0;
+    cacheMisses = 0;
+    log('Cleared entire cache');
+  }
+}
+
+/**
+ * Get cache statistics for monitoring and debugging
+ * 
+ * CACHE PERFORMANCE METRICS:
+ * - numFiles: Current number of files in cache
+ * - hits: Number of times cached results were used (avoided re-analysis)
+ * - misses: Number of times analysis was required (no valid cache entry)
+ * - hitRate: Ratio of hits to total requests (0.0 to 1.0)
+ * - hitRatePercent: Hit rate as percentage string (e.g., "75.5")
+ * 
+ * INTERPRETING RESULTS:
+ * - High hit rate (>50%): Cache is effective, reducing analysis overhead
+ * - Low hit rate (<30%): Consider increasing cache size or checking for issues
+ * - Zero hits: Cache may be disabled or files are changing too frequently
+ * 
+ * USAGE:
+ * - Called by "Show Cache Statistics" command
+ * - Displayed in output channel for debugging
+ * - Helps tune cache size configuration
+ * 
+ * @returns Object containing cache statistics
  */
 export function getCacheStats() {
+  const totalRequests = cacheHits + cacheMisses;
+  const hitRate = totalRequests > 0 ? cacheHits / totalRequests : 0;
+  
   return {
-    numFiles: 0,
-    totalEntries: 0,
-    estimatedMemoryMB: 0,
-    fileStats: [],
+    numFiles: cache.size,           // Current cache size
+    totalEntries: cache.size,       // Same as numFiles (for compatibility)
+    hits: cacheHits,                // Number of cache hits
+    misses: cacheMisses,            // Number of cache misses
+    hitRate: hitRate,               // Hit rate as decimal (0.0-1.0)
+    hitRatePercent: (hitRate * 100).toFixed(1), // Hit rate as percentage string
   };
-}
-
-/**
- * Clear cache (no-op in simple version)
- */
-export function clearCache(_fileUri?: string): void {
-  // No cache in simple version
 }

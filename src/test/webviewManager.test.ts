@@ -1,6 +1,12 @@
 /**
  * Tests for WebviewManager
  * Verifies graph data communication between extension and webview
+ * 
+ * NOTE: These tests produce "DisposableStore already disposed" errors in the console.
+ * These are harmless warnings from VS Code's internal webview disposal system during testing.
+ * They occur because the test environment disposes resources aggressively between tests,
+ * and webview event listeners try to register with already-disposed stores.
+ * The tests still pass correctly - these errors don't affect functionality.
  */
 
 import * as assert from 'assert';
@@ -10,6 +16,7 @@ import { WebviewManager, ViewState } from '../webviewManager';
 suite('WebviewManager - Graph Data Communication', () => {
   let outputChannel: vscode.OutputChannel;
   let context: vscode.ExtensionContext;
+  let manager: WebviewManager | undefined;
 
   setup(() => {
     outputChannel = vscode.window.createOutputChannel('Test');
@@ -21,17 +28,22 @@ suite('WebviewManager - Graph Data Communication', () => {
   });
 
   teardown(() => {
+    // Dispose manager before disposing output channel to prevent disposal errors
+    if (manager) {
+      manager.dispose();
+      manager = undefined;
+    }
     outputChannel.dispose();
   });
 
   test('should create WebviewManager instance', () => {
-    const manager = new WebviewManager(context, outputChannel);
+    manager = new WebviewManager(context, outputChannel);
     assert.ok(manager);
     assert.strictEqual(manager.hasActiveVisualization(), false);
   });
 
   test('should track active visualization state', async () => {
-    const manager = new WebviewManager(context, outputChannel);
+    manager = new WebviewManager(context, outputChannel);
     
     // Initially no active visualization
     assert.strictEqual(manager.hasActiveVisualization(), false);
@@ -49,19 +61,19 @@ suite('WebviewManager - Graph Data Communication', () => {
   });
 
   test('should validate graph JSON before showing', async () => {
-    const manager = new WebviewManager(context, outputChannel);
+    manager = new WebviewManager(context, outputChannel);
     
     // Invalid JSON should throw
     await assert.rejects(
       async () => {
-        await manager.showVisualization('invalid json');
+        await manager!.showVisualization('invalid json');
       },
       /Invalid graph JSON/
     );
   });
 
   test('should preserve view state across updates', async () => {
-    const manager = new WebviewManager(context, outputChannel);
+    manager = new WebviewManager(context, outputChannel);
     
     const graphJson1 = JSON.stringify({ nodes: [{ id: '1' }], edges: [] });
     const graphJson2 = JSON.stringify({ nodes: [{ id: '1' }, { id: '2' }], edges: [] });
@@ -77,7 +89,7 @@ suite('WebviewManager - Graph Data Communication', () => {
     }
     
     // Refresh with new graph
-    await manager.refresh(graphJson2);
+    await manager!.refresh(graphJson2);
     
     // View state should be preserved
     const updatedState = manager.getCurrentState();
@@ -86,7 +98,7 @@ suite('WebviewManager - Graph Data Communication', () => {
   });
 
   test('should update scope information', async () => {
-    const manager = new WebviewManager(context, outputChannel);
+    manager = new WebviewManager(context, outputChannel);
     
     const graphJson = JSON.stringify({ nodes: [], edges: [] });
     
@@ -102,38 +114,38 @@ suite('WebviewManager - Graph Data Communication', () => {
   });
 
   test('should throw error when refreshing without active visualization', async () => {
-    const manager = new WebviewManager(context, outputChannel);
+    manager = new WebviewManager(context, outputChannel);
     
     const graphJson = JSON.stringify({ nodes: [], edges: [] });
     
     await assert.rejects(
       async () => {
-        await manager.refresh(graphJson);
+        await manager!.refresh(graphJson);
       },
       /No active visualization to refresh/
     );
   });
 
   test('should throw error when exporting without active visualization', async () => {
-    const manager = new WebviewManager(context, outputChannel);
+    manager = new WebviewManager(context, outputChannel);
     
     await assert.rejects(
       async () => {
-        await manager.exportJson();
+        await manager!.exportJson();
       },
       /No active visualization to export/
     );
     
     await assert.rejects(
       async () => {
-        await manager.exportPng();
+        await manager!.exportPng();
       },
       /No active visualization to export/
     );
   });
 
   test('should validate JSON during refresh', async () => {
-    const manager = new WebviewManager(context, outputChannel);
+    manager = new WebviewManager(context, outputChannel);
     
     const validJson = JSON.stringify({ nodes: [], edges: [] });
     await manager.showVisualization(validJson);
@@ -141,14 +153,14 @@ suite('WebviewManager - Graph Data Communication', () => {
     // Invalid JSON should throw during refresh
     await assert.rejects(
       async () => {
-        await manager.refresh('invalid json');
+        await manager!.refresh('invalid json');
       },
       /Invalid graph JSON/
     );
   });
 
   test('should handle graph configuration options', async () => {
-    const manager = new WebviewManager(context, outputChannel);
+    manager = new WebviewManager(context, outputChannel);
     
     const graphJson = JSON.stringify({ nodes: [], edges: [] });
     const graphConfig = {
@@ -170,12 +182,15 @@ suite('WebviewManager - Graph Data Communication', () => {
   });
 
   test('should clean up on dispose', () => {
-    const manager = new WebviewManager(context, outputChannel);
+    manager = new WebviewManager(context, outputChannel);
     
     // Should not throw
     manager.dispose();
     
     // After dispose, should not have active visualization
     assert.strictEqual(manager.hasActiveVisualization(), false);
+    
+    // Clear manager reference since we already disposed it
+    manager = undefined;
   });
 });

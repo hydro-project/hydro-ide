@@ -59,139 +59,76 @@ export class GraphExtractor {
   }
 
   /**
-   * Extract graph information by coordinating tree-sitter and LSP analysis
+   * Extract graph information using tree-sitter first, then LSP for type filtering
    */
   public async extractGraph(
     document: vscode.TextDocument,
-    scopeTarget: ScopeTarget
+    _scopeTarget: ScopeTarget
   ): Promise<GraphExtractionResult> {
     this.log(`Extracting graph for ${document.fileName}`);
 
-    // Run both analyses in parallel
-    const [treeSitterResult, lspLocations] = await Promise.all([
-      this.treeSitterAnalyzer.analyzeDocument(document),
-      this.lspAnalyzer.analyzeDocument(document),
-    ]);
-
+    // Step 1: Use tree-sitter to find all operator calls (precise structural analysis)
+    const treeSitterResult = await this.treeSitterAnalyzer.analyzeDocument(document);
     this.log(`Tree-sitter found ${treeSitterResult.allOperatorCalls.length} operator calls`);
-    this.log(`LSP found ${lspLocations.length} location-typed identifiers`);
 
-    // Filter LSP results to scope
-    const scopedLSPLocations = this.filterToScope(lspLocations, scopeTarget, document);
-    this.log(`Filtered to ${scopedLSPLocations.length} identifiers in scope`);
-
-    // Match operators between tree-sitter and LSP results
-    const matchResult = this.matchOperators(treeSitterResult.allOperatorCalls, scopedLSPLocations);
-    
-    this.log(`Matched ${matchResult.matchedOperators.length} operators`);
-    this.log(`${matchResult.unmatchedTreeSitterOperators.length} tree-sitter operators unmatched`);
-    this.log(`${matchResult.unmatchedLSPIdentifiers.length} LSP identifiers unmatched`);
-
-    // Filter to only valid dataflow operators
-    const validOperators = matchResult.matchedOperators.filter(matched => {
-      const returnType = matched.locationInfo.fullReturnType || matched.locationInfo.locationType;
-      
-      if (returnType && !this.isValidDataflowOperator(matched.operatorCall.name, returnType)) {
-        this.log(`Filtered out ${matched.operatorCall.name} - not a dataflow operator (return type: ${returnType})`);
-        return false;
-      }
-
-      return true;
-    });
-
-    this.log(`Filtered to ${validOperators.length} valid dataflow operators`);
-
-    return {
-      matchedOperators: validOperators,
-      unmatchedTreeSitterOperators: matchResult.unmatchedTreeSitterOperators,
-      unmatchedLSPIdentifiers: matchResult.unmatchedLSPIdentifiers,
-    };
-  }
-
-  /**
-   * Match operators between tree-sitter and LSP results
-   */
-  private matchOperators(
-    operatorCalls: OperatorCall[],
-    lspLocations: LocationInfo[]
-  ): {
-    matchedOperators: MatchedOperator[];
-    unmatchedTreeSitterOperators: OperatorCall[];
-    unmatchedLSPIdentifiers: LocationInfo[];
-  } {
+    // Step 2: For each operator, query LSP for type information and filter by location types
     const matchedOperators: MatchedOperator[] = [];
-    const unmatchedTreeSitterOperators: OperatorCall[] = [];
-    const unmatchedLSPIdentifiers: LocationInfo[] = [...lspLocations];
-
-    for (const operatorCall of operatorCalls) {
-      // Find matching LSP location with flexible coordinate matching
-      let bestMatch: LocationInfo | null = null;
-      let bestDistance = Infinity;
-      let bestMatchIndex = -1;
-
-      for (let i = 0; i < unmatchedLSPIdentifiers.length; i++) {
-        const lspLoc = unmatchedLSPIdentifiers[i];
-        
-        // Must match operator name and be on same line
-        if (lspLoc.operatorName === operatorCall.name && lspLoc.range.start.line === operatorCall.line) {
-          const distance = Math.abs(lspLoc.range.start.character - operatorCall.column);
-          if (distance < bestDistance) {
-            bestDistance = distance;
-            bestMatch = lspLoc;
-            bestMatchIndex = i;
-          }
-        }
+    const rejectedOperators: OperatorCall[] = [];
+    
+    for (const operatorCall of treeSitterResult.allOperatorCalls) {
+      // Query LSP for type information at this specific operator position
+      const position = new vscode.Position(operatorCall.line, operatorCall.column);
+      const typeInfo = await this.lspAnalyzer.getTypeAtPosition(document, position, operatorCall.isMethodCall);
+      
+      if (!typeInfo) {
+        rejectedOperators.push(operatorCall);
+        continue;
       }
 
-      if (bestMatch && bestDistance <= 10) { // Allow up to 10 character difference
-        matchedOperators.push({
-          operatorCall,
-          locationInfo: bestMatch,
-        });
+      // Parse location type from the type information
+      const locationKind = this.lspAnalyzer.parseLocationType(typeInfo);
+      const isSink = await this.lspAnalyzer.isSinkOperator(document, position, operatorCall.name, typeInfo, 5000);
+      
+      // Check if this is a valid Hydro operator
+      if (locationKind || isSink) {
+        const isValidOperator = this.isValidDataflowOperator(operatorCall.name, typeInfo);
         
-        // Remove from unmatched list
-        unmatchedLSPIdentifiers.splice(bestMatchIndex, 1);
+        if (isValidOperator) {
+          // Create LocationInfo from the operator and type information
+          const locationInfo: LocationInfo = {
+            locationType: typeInfo,
+            locationKind: locationKind || 'Process<Leader>', // Default for sink operators
+            range: new vscode.Range(operatorCall.line, operatorCall.column, operatorCall.line, operatorCall.column + operatorCall.name.length),
+            operatorName: operatorCall.name,
+            fullReturnType: typeInfo,
+          };
+
+          matchedOperators.push({
+            operatorCall,
+            locationInfo,
+          });
+        } else {
+          this.log(`Filtered out ${operatorCall.name} - not a dataflow operator (return type: ${typeInfo})`);
+          rejectedOperators.push(operatorCall);
+        }
       } else {
-        unmatchedTreeSitterOperators.push(operatorCall);
+        rejectedOperators.push(operatorCall);
       }
     }
+
+    this.log(`Found ${matchedOperators.length} valid Hydro operators`);
+    this.log(`Rejected ${rejectedOperators.length} non-Hydro operators`);
 
     return {
       matchedOperators,
-      unmatchedTreeSitterOperators,
-      unmatchedLSPIdentifiers,
+      unmatchedTreeSitterOperators: rejectedOperators,
+      unmatchedLSPIdentifiers: [], // No unmatched LSP identifiers in this approach
     };
   }
 
-  /**
-   * Filter locations to scope boundaries
-   */
-  private filterToScope(
-    locations: LocationInfo[],
-    scopeTarget: ScopeTarget,
-    _document: vscode.TextDocument
-  ): LocationInfo[] {
-    switch (scopeTarget.type) {
-      case 'function':
-        // Filter to operators within the target function(s)
-        if (scopeTarget.functions.length === 0) {
-          return [];
-        }
-        // Implementation would go here - for now return all
-        return locations;
 
-      case 'file':
-        // Filter to operators in the active file
-        if (!scopeTarget.activeFilePath) {
-          return locations;
-        }
-        // Implementation would go here - for now return all
-        return locations;
 
-      default:
-        return locations;
-    }
-  }
+
 
   /**
    * Check if an operator is a valid dataflow operator based on its return type

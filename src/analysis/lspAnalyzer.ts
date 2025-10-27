@@ -69,6 +69,9 @@ export class LSPAnalyzer {
 
   /**
    * Analyze a document to find all identifiers with Location types
+   * 
+   * NOTE: This method is kept for backward compatibility with the LocationAnalyzer facade.
+   * The new architecture uses tree-sitter first, then calls getTypeAtPosition directly.
    */
   public async analyzeDocument(document: vscode.TextDocument): Promise<LocationInfo[]> {
     try {
@@ -236,20 +239,36 @@ export class LSPAnalyzer {
         const isSink = await this.isSinkOperator(document, position, name, typeInfo, timeout);
 
         if (locationKind || isSink) {
-          foundLocationCount++;
-          
-          const effectiveLocationKind = locationKind || 'Process<Leader>'; // Default for sink operators
-          
-          locationInfos.push({
-            locationType: typeInfo,
-            locationKind: effectiveLocationKind,
-            range,
-            operatorName: name,
-            fullReturnType: typeInfo,
-          });
+          // Prioritize method calls over variable references
+          // For variables, only include if they have a return type that suggests they're operators
+          const isLikelyOperator = isMethodCall || 
+            typeInfo.includes('Stream<') || 
+            typeInfo.includes('Singleton<') || 
+            typeInfo.includes('Optional<') ||
+            typeInfo.includes('KeyedStream<') ||
+            typeInfo.includes('KeyedSingleton<') ||
+            isSink;
 
-          if (foundLocationCount <= 10) {
-            this.log(`  Found location operator '${name}' with type: ${typeInfo}`);
+          if (isLikelyOperator) {
+            foundLocationCount++;
+            
+            const effectiveLocationKind = locationKind || 'Process<Leader>'; // Default for sink operators
+            
+            locationInfos.push({
+              locationType: typeInfo,
+              locationKind: effectiveLocationKind,
+              range,
+              operatorName: name,
+              fullReturnType: typeInfo,
+            });
+
+            if (foundLocationCount <= 10) {
+              this.log(`  Found location operator '${name}' with type: ${typeInfo}`);
+            }
+          } else {
+            if (foundLocationCount <= 10) {
+              this.log(`  Skipped variable '${name}' (not an operator): ${typeInfo}`);
+            }
           }
         }
       } catch (error) {
@@ -259,6 +278,8 @@ export class LSPAnalyzer {
     }
 
     this.log(`Processed ${candidateCount} candidates, queried ${queriedCount}, found ${foundLocationCount} with Location types`);
+    this.log(`  Method calls: ${locationInfos.filter(loc => loc.operatorName && document.lineAt(loc.range.start.line).text[loc.range.start.character - 1] === '.').length}`);
+    this.log(`  Variables: ${locationInfos.filter(loc => loc.operatorName && document.lineAt(loc.range.start.line).text[loc.range.start.character - 1] !== '.').length}`);
     return locationInfos;
   }
 
@@ -301,7 +322,7 @@ export class LSPAnalyzer {
   /**
    * Query rust-analyzer for type information at a specific position
    */
-  private async getTypeAtPosition(
+  public async getTypeAtPosition(
     document: vscode.TextDocument,
     position: vscode.Position,
     isMethod: boolean = false,
@@ -433,7 +454,7 @@ export class LSPAnalyzer {
    * - "Tick<Tick<Process<'a, Leader>>>" -> "Tick<Tick<Process<Leader>>>"
    * - "Stream<(String, i32), Tick<Process<'a, Leader>>, Bounded::UnderlyingBound, ...>" -> "Tick<Process<Leader>>"
    */
-  private parseLocationType(fullType: string): string | null {
+  public parseLocationType(fullType: string): string | null {
     try {
       // Validate input is not null/undefined/empty
       if (!fullType || typeof fullType !== 'string' || fullType.length === 0) {
@@ -600,7 +621,7 @@ export class LSPAnalyzer {
   /**
    * Check if an operator is a sink operator by analyzing its signature
    */
-  private async isSinkOperator(
+  public async isSinkOperator(
     _document: vscode.TextDocument,
     _position: vscode.Position,
     _operatorName: string,

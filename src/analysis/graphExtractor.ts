@@ -212,6 +212,20 @@ export class GraphExtractor {
       return true;
     }
 
+    // Accept Tick types (these are valid Hydro operators)
+    if (returnType.includes('Tick<')) {
+      return true;
+    }
+
+    // Accept location types directly (Process, Cluster, etc.)
+    if (
+      returnType.includes('Process<') ||
+      returnType.includes('Cluster<') ||
+      returnType.includes('External<')
+    ) {
+      return true;
+    }
+
     // Accept sink operators that return unit type ()
     if (returnType.includes('()') && this.isSinkOperator(operatorName)) {
       return true;

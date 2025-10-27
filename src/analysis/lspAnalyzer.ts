@@ -424,9 +424,18 @@ export class LSPAnalyzer {
 
   /**
    * Parse Location type from a full type string
+   * Examples:
+   * - "Stream<T, Process<'a, Leader>, Unbounded>" -> "Process<Leader>"
+   * - "Process<'_, Leader>" -> "Process<Leader>"
+   * - "Tick<Cluster<'a, Worker>>" -> "Tick<Cluster<Worker>>"
+   * - "&Tick<Process<'a, Leader>>" -> "Tick<Process<Leader>>"
+   * - "Optional<(), Tick<Cluster<'_, Proposer>>, Bounded>" -> "Tick<Cluster<Proposer>>"
+   * - "Tick<Tick<Process<'a, Leader>>>" -> "Tick<Tick<Process<Leader>>>"
+   * - "Stream<(String, i32), Tick<Process<'a, Leader>>, Bounded::UnderlyingBound, ...>" -> "Tick<Process<Leader>>"
    */
   private parseLocationType(fullType: string): string | null {
     try {
+      // Validate input is not null/undefined/empty
       if (!fullType || typeof fullType !== 'string' || fullType.length === 0) {
         return null;
       }
@@ -437,36 +446,155 @@ export class LSPAnalyzer {
       unwrapped = unwrapped.replace(/^&(?:mut\s+)?/, '');
 
       // For Stream/KeyedStream/Optional/Singleton/KeyedSingleton types, extract the location parameter
+      // These types have the location as the second or third type parameter
+      // Stream<T, L, ...> or KeyedStream<K, V, L, ...> or Optional<T, L, ...> etc.
       const collectionMatch = unwrapped.match(
-        /^(?:Stream|KeyedStream|Optional|Singleton|KeyedSingleton)<[^,]*,\s*([^,]+)(?:,.*)?>/
+        /^(Stream|KeyedStream|Optional|Singleton|KeyedSingleton)<(.+)>$/
       );
       if (collectionMatch) {
-        const locationParam = collectionMatch[1].trim();
-        return this.cleanupLocationKind(locationParam);
+        const params = collectionMatch[2];
+        // Parse type parameters carefully, respecting nested angle brackets
+        const typeParams = this.parseTypeParameters(params);
+
+        // For Stream, Optional, Singleton: location is 2nd parameter (index 1)
+        // For KeyedStream, KeyedSingleton: location is 3rd parameter (index 2)
+        const locationIndex = collectionMatch[1].startsWith('Keyed') ? 2 : 1;
+
+        if (typeParams.length > locationIndex) {
+          const locationParam = typeParams[locationIndex].trim();
+          // Recursively parse the location parameter (it might be Tick<Process<...>>)
+          return this.parseLocationType(locationParam);
+        }
       }
 
-      // For direct location types like Process<'a, Leader> or Tick<Process<'a, Leader>>
-      const directMatch = unwrapped.match(/^((?:Tick<)*(?:Process|Cluster|External)<[^>]*>(?:>)*)/);
-      if (directMatch) {
-        return this.cleanupLocationKind(directMatch[1]);
+      // Count and strip Tick wrappers from the beginning, preserving them for later
+      const tickWrappers: string[] = [];
+      let current = unwrapped;
+      let tickMatch = current.match(/^Tick<(.+)>$/);
+
+      while (tickMatch) {
+        tickWrappers.push('Tick');
+        current = tickMatch[1];
+        tickMatch = current.match(/^Tick<(.+)>$/);
+      }
+
+      // Match Process<'a, X> or Cluster<'_, X> or External<'a, X>
+      const locationMatch = current.match(/(Process|Cluster|External)<'[^,>]+,\s*([^>,]+)>/);
+      if (locationMatch) {
+        const locationKind = locationMatch[1];
+        const typeParam = locationMatch[2].trim();
+        let result = `${locationKind}<${typeParam}>`;
+
+        // Re-wrap with all the Tick wrappers we found
+        for (let i = tickWrappers.length - 1; i >= 0; i--) {
+          result = `Tick<${result}>`;
+        }
+
+        return result;
+      }
+
+      // Fallback: just the location kind without type parameter
+      const simpleMatch = current.match(/(Process|Cluster|External)</);
+      if (simpleMatch) {
+        let result = simpleMatch[1];
+
+        // Re-wrap with all the Tick wrappers we found
+        for (let i = tickWrappers.length - 1; i >= 0; i--) {
+          result = `Tick<${result}>`;
+        }
+
+        return result;
       }
 
       return null;
     } catch (error) {
-      this.log(`WARNING: Error parsing location type "${fullType}": ${error}`);
+      // Handle malformed type strings gracefully
+      if (error instanceof Error) {
+        this.log(`WARNING: Error parsing location type from '${fullType}': ${error.message}`);
+      } else {
+        this.log(`WARNING: Unknown error parsing location type: ${String(error)}`);
+      }
       return null;
     }
   }
 
   /**
-   * Clean up location kind by removing lifetimes and normalizing format
+   * Parse type parameters from a comma-separated list, respecting nested angle brackets and parentheses
+   * Example: "T, Process<'a, Leader>, Unbounded" -> ["T", "Process<'a, Leader>", "Unbounded"]
+   * Example: "(String, i32), Process<'a, Leader>" -> ["(String, i32)", "Process<'a, Leader>"]
    */
-  private cleanupLocationKind(locationKind: string): string {
-    return locationKind
-      .replace(/'[a-zA-Z_][a-zA-Z0-9_]*,?\s*/g, '') // Remove lifetimes
-      .replace(/,\s*>/g, '>') // Clean up trailing commas
-      .replace(/\s+/g, ' ') // Normalize whitespace
-      .trim();
+  private parseTypeParameters(params: string): string[] {
+    try {
+      // Validate input
+      if (!params || typeof params !== 'string') {
+        return [];
+      }
+
+      const result: string[] = [];
+      let current = '';
+      let angleDepth = 0;
+      let parenDepth = 0;
+
+      for (let i = 0; i < params.length; i++) {
+        const char = params[i];
+
+        if (char === '<') {
+          angleDepth++;
+          current += char;
+        } else if (char === '>') {
+          angleDepth--;
+          current += char;
+
+          // Validate bracket matching
+          if (angleDepth < 0) {
+            this.log(`WARNING: Mismatched angle brackets in type parameters: ${params}`);
+            angleDepth = 0; // Reset to prevent further issues
+          }
+        } else if (char === '(') {
+          parenDepth++;
+          current += char;
+        } else if (char === ')') {
+          parenDepth--;
+          current += char;
+
+          // Validate parenthesis matching
+          if (parenDepth < 0) {
+            this.log(`WARNING: Mismatched parentheses in type parameters: ${params}`);
+            parenDepth = 0; // Reset to prevent further issues
+          }
+        } else if (char === ',' && angleDepth === 0 && parenDepth === 0) {
+          const trimmed = current.trim();
+          if (trimmed) {
+            result.push(trimmed);
+          }
+          current = '';
+        } else {
+          current += char;
+        }
+      }
+
+      const trimmed = current.trim();
+      if (trimmed) {
+        result.push(trimmed);
+      }
+
+      // Warn about unclosed brackets/parentheses
+      if (angleDepth !== 0) {
+        this.log(`WARNING: Unclosed angle brackets in type parameters: ${params} (depth: ${angleDepth})`);
+      }
+      if (parenDepth !== 0) {
+        this.log(`WARNING: Unclosed parentheses in type parameters: ${params} (depth: ${parenDepth})`);
+      }
+
+      return result;
+    } catch (error) {
+      if (error instanceof Error) {
+        this.log(`WARNING: Error parsing type parameters from '${params}': ${error.message}`);
+      } else {
+        this.log(`WARNING: Unknown error parsing type parameters: ${String(error)}`);
+      }
+      return [];
+    }
   }
 
   /**

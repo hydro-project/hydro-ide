@@ -776,7 +776,7 @@ export class ScopeAnalyzer {
       return true;
     }
 
-    // Check 2: Uses Hydro macros (dfir_syntax!, hydro_lang::flow!, etc.)
+    // Check 2: Uses Hydro macros (hydro_lang::flow!, etc.)
     if (func.usesMacro) {
       this.outputChannel.appendLine(
         `[ScopeAnalyzer] Function ${func.name} uses Hydro macro`
@@ -834,13 +834,7 @@ export class ScopeAnalyzer {
     }
 
     // Check 7: Function body contains Hydro-specific patterns
-    // Look for dfir_syntax! macro
-    if (/dfir_syntax!\s*\{/.test(functionBody)) {
-      this.outputChannel.appendLine(
-        `[ScopeAnalyzer] Function ${func.name} contains dfir_syntax! macro`
-      );
-      return true;
-    }
+    // Note: dfir_syntax! macro detection removed as IDE extension doesn't target DFIR
 
     // Look for hydro_lang::flow! or hydro::flow! macro
     if (/(?:hydro|hydro_lang)::flow!\s*\(/.test(functionBody)) {

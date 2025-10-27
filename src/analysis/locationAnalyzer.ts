@@ -784,6 +784,18 @@ export async function analyzeDocument(document: vscode.TextDocument): Promise<Lo
     const cached = getCached(uri, document.version);
     if (cached) {
       log(`Cache hit for ${document.fileName} v${document.version} (${cached.length} locations)`);
+      // Debug: Write cache hit info
+      import('fs').then(fs => {
+        fs.writeFileSync('/tmp/locationAnalyzer-cache-hit.json', JSON.stringify({
+          timestamp: new Date().toISOString(),
+          fileName: document.fileName,
+          uri: uri,
+          version: document.version,
+          cachedResultCount: cached.length
+        }, null, 2));
+      }).catch(() => {
+        // Ignore fs errors in debug code
+      });
       return cached;
     }
 
@@ -793,8 +805,24 @@ export async function analyzeDocument(document: vscode.TextDocument): Promise<Lo
     // Get query timeout from configuration
     const queryTimeout = config.get<number>('performance.queryTimeout', 5000);
 
+    // Debug: fs will be imported dynamically for debugging
+
     // Get semantic tokens to find all identifiers
     const tokens = await getSemanticTokens(document, queryTimeout);
+    const debugInfo = {
+      timestamp: new Date().toISOString(),
+      fileName: document.fileName,
+      tokensReceived: !!tokens,
+      tokensDataLength: tokens?.data?.length || 0,
+      queryTimeout: queryTimeout
+    };
+    const debugLine = JSON.stringify(debugInfo) + '\n';
+    import('fs').then(fs => {
+      fs.appendFileSync('/tmp/locationAnalyzer-all-calls.log', debugLine);
+    }).catch(() => {
+      // Ignore fs errors in debug code
+    });
+    
     if (!tokens) {
       log(
         'WARNING: No semantic tokens available. rust-analyzer may not be ready or file may not be valid Rust code.'
@@ -820,6 +848,9 @@ export async function analyzeDocument(document: vscode.TextDocument): Promise<Lo
     let candidateCount = 0;
     let queriedCount = 0;
     let foundLocationCount = 0;
+    
+    // Debug: Track candidates
+    const debugCandidates: unknown[] = [];
 
     for (let i = 0; i < data.length; i += 5) {
       try {
@@ -854,6 +885,14 @@ export async function analyzeDocument(document: vscode.TextDocument): Promise<Lo
         // We're interested in: 8=variable (includes methods), 12=parameter, 17=local variable/binding
         // Note: rust-analyzer uses type 12 for function parameters, not 7
         const isRelevant = tokenType === 8 || tokenType === 12 || tokenType === 17;
+        
+        // Debug: Log all token types to see what we're missing
+        if (candidateCount < 20) { // Only log first 20 to avoid spam
+          const lineText = document.lineAt(line).text;
+          const tokenText = lineText.substring(char, char + length);
+          log(`Token ${candidateCount}: type=${tokenType}, text="${tokenText}", line=${line}, char=${char}`);
+        }
+        
         if (!isRelevant) {
           continue;
         }
@@ -876,14 +915,31 @@ export async function analyzeDocument(document: vscode.TextDocument): Promise<Lo
 
         candidateCount++;
 
+        // Debug: Track candidates
+        if (candidateCount <= 20) {
+          debugCandidates.push({
+            name,
+            line,
+            char,
+            tokenType,
+            candidateNumber: candidateCount
+          });
+        }
+
         // Skip macros
         if (name === '!' || name.endsWith('!')) {
+          if (candidateCount <= 10) {
+            log(`    Skipping macro: "${name}"`);
+          }
           continue;
         }
 
         // Skip if we've already checked this position
         const posKey = `${line}:${char}`;
         if (seenPositions.has(posKey)) {
+          if (candidateCount <= 10) {
+            log(`    Skipping duplicate position: ${posKey}`);
+          }
           continue;
         }
         seenPositions.add(posKey);
@@ -915,7 +971,6 @@ export async function analyzeDocument(document: vscode.TextDocument): Promise<Lo
 
         if ((locationKind && !locationKind.includes('…')) || isSinkOperator) {
           foundLocationCount++;
-          log(`  DEBUG: Found operator '${name}' with typeInfo: ${typeInfo}`);
 
           // For sink operators, we need to infer the location from context
           // Since they don't have location in their return type, we'll use a placeholder
@@ -1033,6 +1088,29 @@ export async function analyzeDocument(document: vscode.TextDocument): Promise<Lo
       }
       // Continue even if caching fails
     }
+
+    // Debug: Write final results to file (append to see all calls)
+    const finalDebugInfo = {
+      timestamp: new Date().toISOString(),
+      fileName: document.fileName,
+      candidateCount,
+      queriedCount,
+      foundLocationCount,
+      candidates: debugCandidates,
+      results: locationInfos.map(loc => ({
+        operatorName: loc.operatorName,
+        locationType: loc.locationType,
+        locationKind: loc.locationKind,
+        line: loc.range.start.line,
+        char: loc.range.start.character
+      }))
+    };
+    const finalLine = JSON.stringify(finalDebugInfo) + '\n';
+    import('fs').then(fs => {
+      fs.appendFileSync('/tmp/locationAnalyzer-all-results.log', finalLine);
+    }).catch(() => {
+      // Ignore fs errors in debug code
+    });
 
     return locationInfos;
   } catch (error) {

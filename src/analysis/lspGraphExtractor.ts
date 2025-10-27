@@ -416,8 +416,25 @@ export class LSPGraphExtractor {
     }
 
     // Extract location information using LocationAnalyzer
+    this.log(`About to call locationAnalyzer.analyzeDocument for ${document.fileName}`);
+    // eslint-disable-next-line no-console
+    console.log(
+      `[LSPGraphExtractor] About to call locationAnalyzer.analyzeDocument for ${document.fileName}`
+    );
     const locations = await locationAnalyzer.analyzeDocument(document);
     this.log(`Found ${locations.length} location-typed operators`);
+    // eslint-disable-next-line no-console
+    console.log(`[LSPGraphExtractor] Found ${locations.length} location-typed operators`);
+
+    if (locations.length === 0) {
+      this.log(
+        `WARNING: LocationAnalyzer returned 0 locations. This suggests rust-analyzer LSP is not providing semantic tokens.`
+      );
+      // eslint-disable-next-line no-console
+      console.log(
+        `[LSPGraphExtractor] WARNING: LocationAnalyzer returned 0 locations. This suggests rust-analyzer LSP is not providing semantic tokens.`
+      );
+    }
 
     // Extract nodes from operators
     const nodes = await this.extractNodes(document, locations, scopeTarget);
@@ -482,11 +499,48 @@ export class LSPGraphExtractor {
     const scopedLocations = this.filterToScope(locations, scopeTarget, document);
     this.log(`Filtered to ${scopedLocations.length} identifiers in scope`);
 
-    // Filter to only operators (method calls), not variables
-    const operatorLocations = scopedLocations.filter((loc) => this.isOperatorCall(document, loc));
-    this.log(`Filtered to ${operatorLocations.length} operators (excluding variables)`);
+    // Use tree-sitter to identify actual operator calls (not variable bindings)
+    const allVariableChains = this.treeSitterParser.parseVariableBindings(document);
+    const allStandaloneChains = this.treeSitterParser.parseStandaloneChains(document);
 
-    for (const location of operatorLocations) {
+    // Create a set of actual operator calls (line:column -> operator name)
+    const operatorCalls = new Set<string>();
+
+    // Add operators from variable assignments (right-hand side of let bindings)
+    for (const binding of allVariableChains) {
+      for (const op of binding.operators) {
+        operatorCalls.add(`${op.line}:${op.column}:${op.name}`);
+      }
+    }
+
+    // Add operators from standalone chains
+    for (const chain of allStandaloneChains) {
+      for (const op of chain) {
+        operatorCalls.add(`${op.line}:${op.column}:${op.name}`);
+      }
+    }
+
+    // Filter to only valid dataflow operators based on return types
+    const dataflowOperators = scopedLocations.filter((loc) => {
+      const returnType = loc.fullReturnType || loc.locationType;
+      const locationKey = `${loc.range.start.line}:${loc.range.start.character}:${loc.operatorName}`;
+
+      // First check: Is this actually an operator call (not a variable binding)?
+      if (!operatorCalls.has(locationKey)) {
+        return false;
+      }
+
+      // Second check: Is this a valid dataflow operator?
+      if (returnType && !this.isValidDataflowOperator(loc.operatorName, returnType)) {
+        return false;
+      }
+      return true;
+    });
+    this.log(
+      `Filtered to ${dataflowOperators.length} valid dataflow operators from ${scopedLocations.length} total identifiers`
+    );
+
+    for (const location of dataflowOperators) {
       try {
         // Extract operator details
         const operatorName = location.operatorName || 'unknown';
@@ -846,7 +900,7 @@ export class LSPGraphExtractor {
           );
           continue;
         }
-        
+
         // If no return type is available, log it but allow the operator through
         if (!returnType) {
           this.log(
@@ -1136,14 +1190,18 @@ export class LSPGraphExtractor {
 
           // Skip operators that are not valid dataflow operators
           if (returnType && !this.isValidDataflowOperator(loc.operatorName, returnType)) {
-            this.log(`[buildOperatorChains] Filtered out ${loc.operatorName} - not a dataflow operator (return type: ${returnType})`);
+            this.log(
+              `[buildOperatorChains] Filtered out ${loc.operatorName} - not a dataflow operator (return type: ${returnType})`
+            );
             continue;
           }
-          
+
           // If no return type is available, log it but allow the operator through
           // This handles cases where LSP isn't ready yet or type info is unavailable
           if (!returnType) {
-            this.log(`[buildOperatorChains] WARNING: ${loc.operatorName} has no return type information - including anyway`);
+            this.log(
+              `[buildOperatorChains] WARNING: ${loc.operatorName} has no return type information - including anyway`
+            );
           }
 
           chainOperators.push({
@@ -1775,6 +1833,8 @@ export class LSPGraphExtractor {
     return normalized;
   }
 
+
+
   /**
    * Check if an operator is a valid dataflow operator based on its return type
    *
@@ -1784,7 +1844,12 @@ export class LSPGraphExtractor {
    *
    * This is the authoritative filtering based on actual return types from LSP.
    */
-  private isValidDataflowOperator(operatorName: string, returnType: string): boolean {
+  private isValidDataflowOperator(operatorName: string, returnType: string | null): boolean {
+    // If no return type available, we can't make a type-based decision
+    if (!returnType) {
+      return false;
+    }
+
     // Accept operators that return live collection types
     if (
       returnType.includes('Stream') ||
@@ -1806,11 +1871,11 @@ export class LSPGraphExtractor {
 
   /**
    * Check if an operator is a sink operator that consumes live collections
-   * 
+   *
    * Sink operators are identified by their signature:
    * - Return unit type ()
    * - Take a live collection as self parameter
-   * 
+   *
    * This method works with return types from LSP, which should have already
    * been validated by the LocationAnalyzer using full signature analysis.
    */
@@ -1818,7 +1883,7 @@ export class LSPGraphExtractor {
     // In the LSP integration context, we rely on the LocationAnalyzer
     // to have already done the signature-based filtering. If an operator
     // with return type () made it this far, it's likely a valid sink operator.
-    // 
+    //
     // We could add additional validation here, but the LocationAnalyzer
     // should have already done the heavy lifting of signature analysis.
     return true; // Trust the LocationAnalyzer's signature-based filtering
@@ -2180,60 +2245,5 @@ export class LSPGraphExtractor {
         },
       ],
     };
-  }
-
-  /**
-   * Check if a LocationInfo represents an operator call (method call) vs a variable
-   *
-   * Operators are method calls like `.map(...)` or `.filter(...)`
-   * Variables are bindings like `let words = ...` or `let process = ...`
-   *
-   * We check if the identifier is preceded by a dot (method call) or followed by `(`
-   *
-   * NOTE: This is ONLY used by LSPGraphExtractor for filtering nodes.
-   * The colorizer should still color ALL identifiers (variables and operators).
-   *
-   * @param document The document
-   * @param location The location info to check
-   * @returns True if this is an operator call
-   */
-  private isOperatorCall(document: vscode.TextDocument, location: LocationInfo): boolean {
-    const line = document.lineAt(location.range.start.line);
-    const text = line.text;
-    const startChar = location.range.start.character;
-    const endChar = location.range.end.character;
-
-    // Debug logging for problematic cases
-    const identifier = text.substring(startChar, endChar);
-    if (identifier === 'process' || identifier === 'cluster') {
-      this.log(
-        `[isOperatorCall] Checking '${identifier}' at line ${location.range.start.line + 1}, chars ${startChar}-${endChar}`
-      );
-      this.log(`[isOperatorCall] Line text: "${text}"`);
-      this.log(`[isOperatorCall] Char before: "${startChar > 0 ? text[startChar - 1] : 'N/A'}"`);
-      this.log(`[isOperatorCall] Char after: "${endChar < text.length ? text[endChar] : 'N/A'}"`);
-    }
-
-    // Check if preceded by a dot (method call like `.map`)
-    if (startChar > 0 && text[startChar - 1] === '.') {
-      if (identifier === 'process' || identifier === 'cluster') {
-        this.log(`[isOperatorCall] '${identifier}' preceded by dot - OPERATOR`);
-      }
-      return true;
-    }
-
-    // Check if followed by `(` (function call like `source_iter(`)
-    if (endChar < text.length && text[endChar] === '(') {
-      if (identifier === 'process' || identifier === 'cluster') {
-        this.log(`[isOperatorCall] '${identifier}' followed by ( - OPERATOR`);
-      }
-      return true;
-    }
-
-    // Otherwise it's likely a variable binding
-    if (identifier === 'process' || identifier === 'cluster') {
-      this.log(`[isOperatorCall] '${identifier}' is variable - NOT OPERATOR`);
-    }
-    return false;
   }
 }

@@ -53,17 +53,7 @@ suite('ScopeAnalyzer Pattern Detection', () => {
     assert.ok(HYDRO_PATTERNS.macro.test(code));
   });
 
-  test('Should match dfir_syntax! in function body', () => {
-    const code = `
-      pub fn test_flow() -> Dfir<'static> {
-        dfir_syntax! {
-          source_iter([1, 2, 3])
-        }
-      }
-    `;
-    // Note: dfir_syntax is detected by the macro pattern in the actual implementation
-    assert.ok(code.includes('dfir_syntax'));
-  });
+
 
   test('Should match public function definition', () => {
     const code = 'pub fn hello_world_flow() -> Dfir';
@@ -96,10 +86,7 @@ suite('ScopeAnalyzer Pattern Detection', () => {
     assert.ok(HYDRO_PATTERNS.hydroImport.test(code));
   });
 
-  test('Should match dfir_rs import', () => {
-    const code = 'use dfir_rs::dfir_syntax;';
-    assert.ok(HYDRO_PATTERNS.hydroImport.test(code));
-  });
+
 
   test('Should not match non-Hydro imports', () => {
     const code = 'use std::collections::HashMap;';
@@ -321,10 +308,9 @@ pub fn chat_app<'a>(
 suite('ScopeAnalyzer Function Parsing', () => {
   test('Should parse simple function', () => {
     const code = `
-pub fn hello_world() -> Dfir<'static> {
-    dfir_syntax! {
-        source_iter([1, 2, 3])
-    }
+#[hydro::flow]
+pub fn hello_world() -> impl Flow {
+    source_iter([1, 2, 3])
 }
 `;
     const lines = code.split('\n');
@@ -341,25 +327,13 @@ pub fn hello_world() -> Dfir<'static> {
     assert.ok(foundFunction, 'Should find function definition');
   });
 
-  test('Should detect dfir_syntax! macro in function body', () => {
-    const code = `
-pub fn test_flow() -> Dfir<'static> {
-    dfir_syntax! {
-        source_iter([1, 2, 3])
-            -> for_each(|x| println!("{}", x));
-    }
-}
-`;
-    assert.ok(code.includes('dfir_syntax!'), 'Should detect dfir_syntax! macro');
-  });
+
 
   test('Should handle functions with attributes', () => {
     const code = `
 #[hydro::flow]
-pub fn attributed_flow() -> Dfir<'static> {
-    dfir_syntax! {
-        source_iter([1, 2, 3])
-    }
+pub fn attributed_flow() -> impl Flow {
+    source_iter([1, 2, 3])
 }
 `;
     assert.ok(code.includes('#[hydro::flow]'), 'Should detect attribute');
@@ -368,10 +342,9 @@ pub fn attributed_flow() -> Dfir<'static> {
 
   test('Should handle functions with generic parameters', () => {
     const code = `
-pub fn generic_flow<'a>() -> Dfir<'a> {
-    dfir_syntax! {
-        source_iter([1, 2, 3])
-    }
+#[hydro::flow]
+pub fn generic_flow<'a>() -> impl Flow {
+    source_iter([1, 2, 3])
 }
 `;
     assert.ok(code.includes('fn generic_flow'), 'Should detect generic function');
@@ -379,10 +352,9 @@ pub fn generic_flow<'a>() -> Dfir<'a> {
 
   test('Should handle functions with complex return types', () => {
     const code = `
-pub fn complex_return() -> Result<Dfir<'static>, Error> {
-    Ok(dfir_syntax! {
-        source_iter([1, 2, 3])
-    })
+#[hydro::flow]
+pub fn complex_return() -> Result<impl Flow, Error> {
+    Ok(source_iter([1, 2, 3]))
 }
 `;
     assert.ok(code.includes('fn complex_return'), 'Should detect function with complex return');
@@ -395,29 +367,26 @@ pub fn complex_return() -> Result<Dfir<'static>, Error> {
 suite('ScopeAnalyzer File Analysis', () => {
   test('Should identify file with Hydro imports', () => {
     const code = `
-use dfir_rs::dfir_syntax;
-use dfir_rs::scheduled::graph::Dfir;
+use hydro::prelude::*;
 
-pub fn test_flow() -> Dfir<'static> {
-    dfir_syntax! {
-        source_iter([1, 2, 3])
-    }
+#[hydro::flow]
+pub fn test_flow() -> impl Flow {
+    source_iter([1, 2, 3])
 }
 `;
     const hasImport = /use\s+(?:hydro|hydro_lang|dfir_rs)(?:::|;)/.test(code);
     assert.ok(hasImport, 'Should detect Hydro imports');
   });
 
-  test('Should identify file with Hydro macros', () => {
+  test('Should identify file with Hydro attributes', () => {
     const code = `
-pub fn test_flow() {
-    dfir_syntax! {
-        source_iter([1, 2, 3])
-    }
+#[hydro::flow]
+pub fn test_flow() -> impl Flow {
+    source_iter([1, 2, 3])
 }
 `;
-    const hasMacro = code.includes('dfir_syntax!');
-    assert.ok(hasMacro, 'Should detect Hydro macros');
+    const hasAttribute = /#\[(?:hydro|hydro_lang)::(?:flow|main)\]/.test(code);
+    assert.ok(hasAttribute, 'Should detect Hydro attributes');
   });
 
   test('Should not identify regular Rust file as Hydro', () => {
@@ -460,15 +429,14 @@ suite('ScopeAnalyzer Edge Cases', () => {
 
   test('Should handle file with nested braces', () => {
     const code = `
-pub fn nested_flow() -> Dfir<'static> {
-    dfir_syntax! {
-        source_iter([1, 2, 3])
-            -> map(|x| {
-                let y = x * 2;
-                y + 1
-            })
-            -> for_each(|x| println!("{}", x));
-    }
+#[hydro::flow]
+pub fn nested_flow() -> impl Flow {
+    source_iter([1, 2, 3])
+        .map(|x| {
+            let y = x * 2;
+            y + 1
+        })
+        .for_each(|x| println!("{}", x))
 }
 `;
     // Count braces
@@ -483,11 +451,10 @@ pub fn nested_flow() -> Dfir<'static> {
 
   test('Should handle function with string containing keywords', () => {
     const code = `
-pub fn string_test() -> Dfir<'static> {
-    dfir_syntax! {
-        source_iter(["fn test", "pub fn another"])
-            -> for_each(|s| println!("{}", s));
-    }
+#[hydro::flow]
+pub fn string_test() -> impl Flow {
+    source_iter(["fn test", "pub fn another"])
+        .for_each(|s| println!("{}", s))
 }
 `;
     // Should still detect the actual function
@@ -497,13 +464,12 @@ pub fn string_test() -> Dfir<'static> {
 
   test('Should handle multiline function signatures', () => {
     const code = `
+#[hydro::flow]
 pub fn multiline_signature(
     param1: i32,
     param2: String,
-) -> Dfir<'static> {
-    dfir_syntax! {
-        source_iter([1, 2, 3])
-    }
+) -> impl Flow {
+    source_iter([1, 2, 3])
 }
 `;
     const hasFunction = /pub fn multiline_signature/.test(code);
@@ -525,8 +491,7 @@ suite('ScopeAnalyzer Real File Tests', () => {
       const content = await fs.readFile(testFilePath, 'utf-8');
       
       // Check for expected patterns
-      assert.ok(content.includes('dfir_syntax!'), 'Should contain dfir_syntax! macro');
-      assert.ok(content.includes('use dfir_rs'), 'Should contain dfir_rs import');
+      assert.ok(content.includes('#[hydro::flow]') || content.includes('use hydro'), 'Should contain Hydro patterns');
       assert.ok(content.includes('fn hello_world_flow'), 'Should contain hello_world_flow');
       assert.ok(content.includes('fn filter_and_count_flow'), 'Should contain filter_and_count_flow');
       assert.ok(content.includes('fn branching_flow'), 'Should contain branching_flow');
@@ -550,7 +515,7 @@ suite('ScopeAnalyzer Real File Tests', () => {
       const content = await fs.readFile(testFilePath, 'utf-8');
       
       // Check for expected patterns
-      assert.ok(content.includes('dfir_syntax!'), 'Should contain dfir_syntax! macro');
+      assert.ok(content.includes('#[hydro::flow]') || content.includes('use hydro'), 'Should contain Hydro patterns');
       assert.ok(content.includes('fn stateful_flow'), 'Should contain stateful_flow');
       assert.ok(content.includes('fn multi_join_flow'), 'Should contain multi_join_flow');
       
@@ -573,7 +538,7 @@ suite('ScopeAnalyzer Real File Tests', () => {
       const content = await fs.readFile(testFilePath, 'utf-8');
       
       // Check for expected patterns
-      assert.ok(content.includes('dfir_syntax!'), 'Should contain dfir_syntax! macro');
+      assert.ok(content.includes('#[hydro::flow]') || content.includes('use hydro'), 'Should contain Hydro patterns');
       assert.ok(content.includes('fn echo_server_flow'), 'Should contain echo_server_flow');
       assert.ok(content.includes('fn broadcast_flow'), 'Should contain broadcast_flow');
       

@@ -6,7 +6,7 @@ This directory contains unit tests for the ScopeAnalyzer component of the Hydro 
 
 ### scopeAnalyzer.test.ts
 Full integration tests that require a VSCode instance. These tests:
-- Test function detection with various Hydro patterns (#[hydro::flow], dfir_syntax!, return types)
+- Test function detection with various Hydro patterns (#[hydro::flow], return types)
 - Test file-level analysis with multiple functions
 - Test workspace-level analysis
 - Test edge cases (no Hydro code, malformed syntax, nested functions)
@@ -66,7 +66,6 @@ The tests cover the following requirements from the spec:
    - Detects `#[hydro::main]` attribute
 
 2. **Function Detection with Macros**
-   - Detects `dfir_syntax!` macro
    - Detects `hydro_lang::flow!` macro
    - Detects `hydro::flow!` macro
 

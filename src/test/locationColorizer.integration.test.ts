@@ -16,6 +16,10 @@ suite('LocationColorizer Integration Tests', () => {
 
   suiteSetup(() => {
     testDataDir = path.join(__dirname, '../../test-fixtures/sample-hydro-project/src');
+    
+    // Initialize locationAnalyzer for tests
+    const outputChannel = vscode.window.createOutputChannel('LocationAnalyzer Test');
+    locationAnalyzer.initialize(outputChannel);
   });
 
   /**

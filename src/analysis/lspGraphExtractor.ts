@@ -31,6 +31,10 @@ export interface Node {
     locationType: string | null;
     locationKind?: string; // Original location kind (e.g., "Process<Leader>")
     backtrace: [];
+    treeSitterPosition?: {
+      line: number;
+      column: number;
+    };
   };
 }
 
@@ -406,6 +410,7 @@ export class LSPGraphExtractor {
     document: vscode.TextDocument,
     scopeTarget: ScopeTarget
   ): Promise<HydroscopeJson> {
+    this.log('=== Hybrid LSP + Tree-sitter Graph Extraction Started ===');
     this.log(`Extracting graph for ${document.fileName} (scope: ${scopeTarget.type})`);
 
     // Check cache first
@@ -415,229 +420,565 @@ export class LSPGraphExtractor {
       return cached;
     }
 
-    // Extract location information using LocationAnalyzer
-    this.log(`About to call locationAnalyzer.analyzeDocument for ${document.fileName}`);
-    // eslint-disable-next-line no-console
-    console.log(
-      `[LSPGraphExtractor] About to call locationAnalyzer.analyzeDocument for ${document.fileName}`
-    );
-    const locations = await locationAnalyzer.analyzeDocument(document);
-    this.log(`Found ${locations.length} location-typed operators`);
-    // eslint-disable-next-line no-console
-    console.log(`[LSPGraphExtractor] Found ${locations.length} location-typed operators`);
+    try {
+      // Step 1: Build reliable structure from tree-sitter
+      this.log('Step 1: Building graph structure from tree-sitter...');
+      const { nodes, edges } = this.buildOperatorChainsFromTreeSitter(document, scopeTarget);
+      this.log(`Tree-sitter created ${nodes.length} nodes and ${edges.length} edges`);
 
-    if (locations.length === 0) {
-      this.log(
-        `WARNING: LocationAnalyzer returned 0 locations. This suggests rust-analyzer LSP is not providing semantic tokens.`
-      );
-      // eslint-disable-next-line no-console
-      console.log(
-        `[LSPGraphExtractor] WARNING: LocationAnalyzer returned 0 locations. This suggests rust-analyzer LSP is not providing semantic tokens.`
-      );
+      // Step 2: Get LSP location information for semantic enhancement
+      this.log('Step 2: Getting LSP location information for enhancement...');
+      const locations = await locationAnalyzer.analyzeDocument(document);
+      this.log(`LSP found ${locations.length} locations`);
+
+      if (locations.length === 0) {
+        this.log(
+          `WARNING: LocationAnalyzer returned 0 locations. This suggests rust-analyzer LSP is not providing semantic tokens.`
+        );
+      }
+
+      // Step 3: Enhance tree-sitter nodes with LSP semantic information (best-effort)
+      this.log('Step 3: Enhancing nodes with LSP semantic information...');
+      this.enhanceNodesWithLSPInfo(nodes, locations, document);
+
+      // Step 4: Build hierarchies (Location + Code) from enhanced nodes
+      const hierarchyData = this.buildLocationAndCodeHierarchies(document, nodes, edges);
+
+      // Step 5: Assemble final JSON
+      const json = this.assembleHydroscopeJson(nodes, edges, hierarchyData);
+
+      // Debug: Save JSON to disk for inspection
+      await this.saveDebugJson(json, document, scopeTarget);
+
+      // Cache result
+      this.setCached(cacheKey, json);
+
+      this.log('=== Hybrid Graph Extraction Completed ===');
+      this.log(`Final result: ${nodes.length} nodes, ${edges.length} edges`);
+
+      return json;
+    } catch (error) {
+      this.log(`Error in hybrid graph extraction: ${error}`);
+      throw error;
     }
-
-    // Extract nodes from operators
-    const nodes = await this.extractNodes(document, locations, scopeTarget);
-    this.log(`Extracted ${nodes.length} nodes`);
-
-    // Extract edges by analyzing dataflow chains
-    const edges = await this.extractEdges(document, nodes, locations);
-    this.log(`Extracted ${edges.length} edges`);
-
-    // Build location hierarchy
-    const hierarchyData = this.buildLocationHierarchy(nodes);
-
-    // Assemble final JSON
-    const json = this.assembleHydroscopeJson(nodes, edges, hierarchyData);
-
-    // Debug: Save JSON to disk for inspection
-    await this.saveDebugJson(json, document, scopeTarget);
-
-    // Cache result
-    this.setCached(cacheKey, json);
-
-    return json;
   }
 
   /**
-   * Extract nodes from Hydro operators
+   * Check if a line starts with a variable reference
    *
-   * Uses LocationAnalyzer results to find operators and queries rust-analyzer
-   * for full type information at each operator position.
+   * Detects patterns like:
+   * - `varname.operator(...)`
+   * - `varname .operator(...)` (with whitespace)
    *
-   * Implements degraded mode operation:
-   * - Handles null/undefined responses gracefully
-   * - Uses default node type (Transform) when inference fails
-   * - Creates nodes even with incomplete location info
-   * - Logs warnings for degraded mode operation
+   * Also handles multi-line chains where the variable is on the previous line:
+   * ```
+   * let x = varname
+   *     .operator()
+   * ```
    *
-   * Requirements addressed:
-   * - 6.2: Handle null/undefined responses from rust-analyzer gracefully
-   * - 6.3: Use default node type (Transform) when inference fails
-   * - 6.4: Create basic hierarchy even with incomplete location info
-   * - 6.5: Log warnings for degraded mode operation
+   * @param document The document being analyzed
+   * @param line The line number to check
+   * @param variableNames Array of variable names to check for
+   * @returns The variable name if found, null otherwise
+   */
+  private detectVariableReference(
+    document: vscode.TextDocument,
+    line: number,
+    variableNames: string[]
+  ): string | null {
+    if (line < 0 || line >= document.lineCount) {
+      return null;
+    }
+
+    const lineText = document.lineAt(line).text.trim();
+
+    // Check each known variable to see if this line starts with it
+    for (const varName of variableNames) {
+      // Pattern: varname.operator(...) at start of line (possibly with leading whitespace)
+      if (lineText.startsWith(varName + '.') || lineText.match(new RegExp(`^${varName}\\s*\\.`))) {
+        return varName;
+      }
+    }
+
+    // If not found on current line and this looks like a dot-chain continuation,
+    // check if previous line ends with a variable name
+    if (lineText.startsWith('.') && line > 0) {
+      const prevLineText = document.lineAt(line - 1).text.trim();
+
+      for (const varName of variableNames) {
+        // Check if previous line is just the variable name or ends with variable name
+        if (
+          prevLineText === varName ||
+          prevLineText.endsWith(` ${varName}`) ||
+          prevLineText.endsWith(`=${varName}`)
+        ) {
+          return varName;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Build operator chains from tree-sitter analysis
+   *
+   * Creates edges between operators based on variable bindings and method chains.
+   * Uses tree-sitter as the primary source for reliable dataflow structure.
+   *
+   * @param document The document being analyzed
+   * @param scopeTarget The scope target for filtering
+   * @returns Object containing both nodes and edges from tree-sitter analysis
+   */
+  private buildOperatorChainsFromTreeSitter(
+    document: vscode.TextDocument,
+    _scopeTarget: ScopeTarget
+  ): { nodes: Node[]; edges: Edge[] } {
+    const nodes: Node[] = [];
+    const edges: Edge[] = [];
+    let nodeIdCounter = 0;
+    let edgeIdCounter = 0;
+
+    // Parse variable bindings and standalone chains using tree-sitter
+    const variableChains = this.treeSitterParser.parseVariableBindings(document);
+    const standaloneChains = this.treeSitterParser.parseStandaloneChains(document);
+
+    this.log(
+      `Tree-sitter found ${variableChains.length} variable chains and ${standaloneChains.length} standalone chains`
+    );
+
+    // Create a map to track nodes by position to avoid duplicates
+    const operatorToNode = new Map<string, Node>();
+
+    // Map from variable names to their last operator node (for creating inter-variable edges)
+    const variableToLastNode = new Map<string, Node>();
+
+    // Helper function to create or get node for an operator
+    const getOrCreateNode = (op: TreeSitterOperatorNode): Node | null => {
+      const key = `${op.line}:${op.column}:${op.name}`;
+
+      if (operatorToNode.has(key)) {
+        return operatorToNode.get(key)!;
+      }
+
+      // Check if this is a known dataflow operator
+      if (!this.isKnownDataflowOperator(op.name)) {
+        this.log(`Skipping unknown operator: ${op.name}`);
+        return null;
+      }
+
+      // Create new node
+      const nodeId = String(nodeIdCounter++);
+      const nodeType = this.inferNodeType(op.name);
+
+      // Extract context for full label
+      const lineText = document.lineAt(op.line).text;
+      const contextStart = Math.max(0, op.column - 10);
+      const contextEnd = Math.min(lineText.length, op.column + op.name.length + 10);
+      const fullLabel = lineText.substring(contextStart, contextEnd).trim();
+
+      const node: Node = {
+        id: nodeId,
+        nodeType,
+        shortLabel: op.name,
+        fullLabel: fullLabel || op.name,
+        label: op.name,
+        data: {
+          locationId: null, // Will be enhanced by LSP if available
+          locationType: null,
+          locationKind: undefined,
+          backtrace: [],
+          // Store tree-sitter position for LSP enhancement
+          treeSitterPosition: {
+            line: op.line,
+            column: op.column,
+          },
+        },
+      };
+
+      operatorToNode.set(key, node);
+      nodes.push(node);
+
+      this.log(`Created node for ${op.name} at line ${op.line}`);
+      return node;
+    };
+
+    // Process variable binding chains
+    for (const binding of variableChains) {
+      this.log(
+        `Processing variable chain '${binding.varName}' with ${binding.operators.length} operators`
+      );
+
+      // Create nodes for all valid operators first
+      const validNodes: { node: Node; index: number }[] = [];
+      for (let i = 0; i < binding.operators.length; i++) {
+        const node = getOrCreateNode(binding.operators[i]);
+        if (node) {
+          validNodes.push({ node, index: i });
+        }
+      }
+
+      // If this variable chain starts from a previously-defined variable reference
+      // (e.g., `let reduced = batches\n  .into_keyed()...`), create an inter-variable edge
+      if (binding.operators.length > 0 && validNodes.length > 0 && variableToLastNode.size > 0) {
+        const firstOpLine = binding.operators[0].line;
+        const variableNames = Array.from(variableToLastNode.keys());
+        const referencedVar = this.detectVariableReference(document, firstOpLine, variableNames);
+        if (referencedVar) {
+          const lastNode = variableToLastNode.get(referencedVar);
+          if (lastNode) {
+            edges.push({
+              id: String(edgeIdCounter++),
+              source: lastNode.id,
+              target: validNodes[0].node.id,
+              semanticTags: [],
+            });
+            this.log(
+              `Created inter-variable edge: ${lastNode.shortLabel} -> ${validNodes[0].node.shortLabel} (via variable '${referencedVar}')`
+            );
+          }
+        }
+      }
+
+      // Create edges between consecutive valid nodes (bridging over skipped operators)
+      for (let i = 0; i < validNodes.length - 1; i++) {
+        const sourceNode = validNodes[i].node;
+        const targetNode = validNodes[i + 1].node;
+
+        edges.push({
+          id: String(edgeIdCounter++),
+          source: sourceNode.id,
+          target: targetNode.id,
+          semanticTags: [], // Empty semantic tags for tree-sitter edges
+        });
+        this.log(`Created edge: ${sourceNode.shortLabel} -> ${targetNode.shortLabel}`);
+      }
+
+      // Track the last node in this variable's chain for inter-variable edges
+      if (validNodes.length > 0) {
+        const lastNode = validNodes[validNodes.length - 1].node;
+        variableToLastNode.set(binding.varName, lastNode);
+        this.log(
+          `Tracked last operator '${lastNode.shortLabel}' for variable '${binding.varName}'`
+        );
+      }
+    }
+
+    // Process standalone chains
+    for (const chain of standaloneChains) {
+      this.log(`Processing standalone chain with ${chain.length} operators`);
+
+      // Create nodes for all valid operators first
+      const validNodes: Node[] = [];
+      for (const op of chain) {
+        const node = getOrCreateNode(op);
+        if (node) {
+          validNodes.push(node);
+        }
+      }
+
+      // Create edges between consecutive valid nodes (bridging over skipped operators)
+      for (let i = 0; i < validNodes.length - 1; i++) {
+        const sourceNode = validNodes[i];
+        const targetNode = validNodes[i + 1];
+
+        edges.push({
+          id: String(edgeIdCounter++),
+          source: sourceNode.id,
+          target: targetNode.id,
+          semanticTags: [], // Empty semantic tags for tree-sitter edges
+        });
+        this.log(`Created edge: ${sourceNode.shortLabel} -> ${targetNode.shortLabel}`);
+      }
+
+      // Check if this standalone chain starts with a variable reference
+      // Example: reduced.snapshot(...) where 'reduced' was assigned earlier
+      if (chain.length > 0 && validNodes.length > 0) {
+        const firstOp = chain[0];
+        const variableNames = Array.from(variableToLastNode.keys());
+        const referencedVar = this.detectVariableReference(document, firstOp.line, variableNames);
+
+        if (referencedVar) {
+          const lastNode = variableToLastNode.get(referencedVar);
+          if (lastNode) {
+            // Create edge from the variable's last operator to this chain's first operator
+            edges.push({
+              id: String(edgeIdCounter++),
+              source: lastNode.id,
+              target: validNodes[0].id,
+              semanticTags: [], // Empty semantic tags for tree-sitter edges
+            });
+            this.log(
+              `Created inter-variable edge: ${lastNode.shortLabel} -> ${validNodes[0].shortLabel} (via variable '${referencedVar}')`
+            );
+          }
+        }
+      }
+    }
+
+    this.log(`Built ${nodes.length} nodes and ${edges.length} edges from tree-sitter`);
+    return { nodes, edges };
+  }
+
+  /**
+   * Enhance tree-sitter nodes with LSP semantic information
+   *
+   * This is a best-effort enhancement that adds location hierarchy and type information
+   * when available from LSP, without breaking the core tree-sitter structure.
+   *
+   * @param nodes Nodes created from tree-sitter
+   * @param locations LSP location information
+   * @param document The document being analyzed
+   */
+  private enhanceNodesWithLSPInfo(
+    nodes: Node[],
+    locations: LocationInfo[],
+    document: vscode.TextDocument
+  ): void {
+    this.log(
+      `Enhancing ${nodes.length} nodes with LSP information from ${locations.length} locations`
+    );
+
+    let enhancedCount = 0;
+
+    for (const node of nodes) {
+      const treeSitterPos = node.data.treeSitterPosition;
+      if (!treeSitterPos) continue;
+
+      // Try to find matching LSP location information
+      let bestMatch: LocationInfo | null = null;
+      let bestDistance = Infinity;
+
+      for (const location of locations) {
+        if (location.operatorName !== node.shortLabel) continue;
+
+        const lspLine = location.range.start.line;
+        const lspColumn = location.range.start.character;
+
+        // Calculate distance between tree-sitter and LSP positions
+        const lineDistance = Math.abs(treeSitterPos.line - lspLine);
+        const columnDistance = Math.abs(treeSitterPos.column - lspColumn);
+        const totalDistance = lineDistance * 100 + columnDistance; // Weight lines more heavily
+
+        if (totalDistance < bestDistance) {
+          bestDistance = totalDistance;
+          bestMatch = location;
+        }
+      }
+
+      // If we found a reasonable match, enhance the node
+      if (bestMatch && bestDistance < 300) {
+        // Allow some tolerance
+        node.data.locationId = this.getLocationId(bestMatch.locationKind);
+        node.data.locationType = this.getLocationType(bestMatch.locationKind);
+        node.data.locationKind = bestMatch.locationKind || undefined;
+
+        // Update full label with LSP context if available
+        try {
+          const lspFullLabel = this.extractFullLabel(document, bestMatch.range);
+          if (lspFullLabel && lspFullLabel.length > node.fullLabel.length) {
+            node.fullLabel = lspFullLabel;
+          }
+        } catch (error) {
+          // Keep existing full label if LSP extraction fails
+        }
+
+        enhancedCount++;
+        this.log(`Enhanced node ${node.shortLabel} with LSP info (distance: ${bestDistance})`);
+      } else {
+        this.log(`No LSP enhancement for ${node.shortLabel} (best distance: ${bestDistance})`);
+      }
+    }
+
+    this.log(`Enhanced ${enhancedCount} of ${nodes.length} nodes with LSP information`);
+
+    // Assign default locations to nodes that didn't get LSP enhancement
+    this.assignDefaultLocations(nodes);
+  }
+
+  /**
+   * Assign default locations to nodes that don't have LSP location information
+   *
+   * This ensures all nodes get some location assignment for proper colorization,
+   * even if we don't have precise LSP type information.
+   *
+   * @param nodes Array of nodes to process
+   */
+  private assignDefaultLocations(nodes: Node[]): void {
+    let defaultAssignmentCount = 0;
+
+    for (const node of nodes) {
+      // Skip nodes that already have location information from LSP
+      if (node.data.locationId !== null && node.data.locationType !== null) {
+        continue;
+      }
+
+      // Assign default location based on operator type and context
+      const defaultLocation = this.inferDefaultLocation(node.shortLabel);
+
+      if (defaultLocation) {
+        node.data.locationId = this.getLocationId(defaultLocation);
+        node.data.locationType = this.getLocationType(defaultLocation);
+        node.data.locationKind = defaultLocation;
+        defaultAssignmentCount++;
+
+        this.log(`Assigned default location '${defaultLocation}' to ${node.shortLabel}`);
+      }
+    }
+
+    this.log(`Assigned default locations to ${defaultAssignmentCount} nodes`);
+  }
+
+  /**
+   * Infer a reasonable default location for an operator based on its type
+   *
+   * @param operatorName The operator name
+   * @returns Default location kind or null if no reasonable default
+   */
+  private inferDefaultLocation(operatorName: string): string | null {
+    // Networking operators typically operate on clusters
+    if (this.isNetworkingOperator(operatorName)) {
+      return 'Cluster<Leader>'; // Default to leader cluster for networking
+    }
+
+    // Source operators often create data at process level
+    if (['source_iter', 'source_stream', 'singleton'].includes(operatorName)) {
+      return 'Process<Leader>'; // Default to leader process for sources
+    }
+
+    // Sink operators typically consume at process level
+    if (this.isSinkOperator(operatorName)) {
+      return 'Process<Leader>'; // Default to leader process for sinks
+    }
+
+    // Aggregation operators often work on clusters
+    if (
+      ['fold', 'reduce', 'fold_commutative', 'reduce_commutative', 'max', 'min', 'count'].includes(
+        operatorName
+      )
+    ) {
+      return 'Cluster<Worker>'; // Default to worker cluster for aggregation
+    }
+
+    // Transform operators can work anywhere, default to process
+    if (['map', 'filter', 'inspect', 'clone', 'values', 'entries', 'keys'].includes(operatorName)) {
+      return 'Process<Worker>'; // Default to worker process for transforms
+    }
+
+    // Time-based operators often work on ticks
+    if (['all_ticks', 'snapshot', 'batch', 'sample_every', 'timeout'].includes(operatorName)) {
+      return 'Tick<Process<Leader>>'; // Default to leader tick for temporal ops
+    }
+
+    // Default fallback for unknown operators
+    return 'Process<Worker>'; // Generic worker process as fallback
+  }
+
+  /**
+   * Extract nodes from Hydro operators using hybrid LSP + tree-sitter approach
+   *
+   * Creates nodes from both LSP location information (when available) and
+   * tree-sitter operator calls (when LSP info is missing). This ensures we
+   * capture all operators in the dataflow graph.
    *
    * @param document The document being analyzed
    * @param locations Location information from LocationAnalyzer
    * @param scopeTarget The scope target for filtering
    * @returns Promise resolving to array of nodes
    */
-  private async extractNodes(
-    document: vscode.TextDocument,
-    locations: LocationInfo[],
-    scopeTarget: ScopeTarget
-  ): Promise<Node[]> {
-    const nodes: Node[] = [];
-    let nodeIdCounter = 0;
-    let degradedModeCount = 0;
 
-    // Check if degraded mode is enabled
-    const config = vscode.workspace.getConfiguration('hydro-ide');
-    const enableDegradedMode = config.get<boolean>('lsp.enableDegradedMode', true);
-
-    // Filter locations to scope boundaries
-    const scopedLocations = this.filterToScope(locations, scopeTarget, document);
-    this.log(`Filtered to ${scopedLocations.length} identifiers in scope`);
-
-    // Use tree-sitter to identify actual operator calls (not variable bindings)
-    const allVariableChains = this.treeSitterParser.parseVariableBindings(document);
-    const allStandaloneChains = this.treeSitterParser.parseStandaloneChains(document);
-
-    // Create a set of actual operator calls (line:column -> operator name)
-    const operatorCalls = new Set<string>();
-
-    // Add operators from variable assignments (right-hand side of let bindings)
-    for (const binding of allVariableChains) {
-      for (const op of binding.operators) {
-        operatorCalls.add(`${op.line}:${op.column}:${op.name}`);
-      }
-    }
-
-    // Add operators from standalone chains
-    for (const chain of allStandaloneChains) {
-      for (const op of chain) {
-        operatorCalls.add(`${op.line}:${op.column}:${op.name}`);
-      }
-    }
-
-    // Filter to only valid dataflow operators based on return types
-    const dataflowOperators = scopedLocations.filter((loc) => {
-      const returnType = loc.fullReturnType || loc.locationType;
-      const locationKey = `${loc.range.start.line}:${loc.range.start.character}:${loc.operatorName}`;
-
-      // First check: Is this actually an operator call (not a variable binding)?
-      if (!operatorCalls.has(locationKey)) {
-        return false;
-      }
-
-      // Second check: Is this a valid dataflow operator?
-      if (returnType && !this.isValidDataflowOperator(loc.operatorName, returnType)) {
-        return false;
-      }
-      return true;
-    });
-    this.log(
-      `Filtered to ${dataflowOperators.length} valid dataflow operators from ${scopedLocations.length} total identifiers`
-    );
-
-    for (const location of dataflowOperators) {
-      try {
-        // Extract operator details
-        const operatorName = location.operatorName || 'unknown';
-
-        // Infer node type - use Transform as default if inference fails
-        let nodeType: NodeType;
-        try {
-          nodeType = this.inferNodeType(operatorName);
-        } catch (error) {
-          if (enableDegradedMode) {
-            nodeType = 'Transform'; // Default fallback
-            degradedModeCount++;
-            this.log(
-              `WARNING: Node type inference failed for '${operatorName}', using default 'Transform'`
-            );
-          } else {
-            throw error;
-          }
-        }
-
-        const shortLabel = operatorName;
-
-        // Extract full label - use short label as fallback
-        let fullLabel: string;
-        try {
-          fullLabel = this.extractFullLabel(document, location.range);
-        } catch (error) {
-          if (enableDegradedMode) {
-            fullLabel = shortLabel;
-            degradedModeCount++;
-            this.log(
-              `WARNING: Full label extraction failed for '${operatorName}', using short label`
-            );
-          } else {
-            throw error;
-          }
-        }
-
-        // Extract location information - use null as fallback
-        let locationId: number | null;
-        let locationType: string | null;
-        try {
-          locationId = this.getLocationId(location.locationKind);
-          locationType = this.getLocationType(location.locationKind);
-        } catch (error) {
-          if (enableDegradedMode) {
-            locationId = null;
-            locationType = null;
-            degradedModeCount++;
-            this.log(
-              `WARNING: Location info extraction failed for '${operatorName}', using null values`
-            );
-          } else {
-            throw error;
-          }
-        }
-
-        nodes.push({
-          id: String(nodeIdCounter++),
-          nodeType,
-          shortLabel,
-          fullLabel,
-          label: shortLabel, // Default to short
-          data: {
-            locationId,
-            locationType,
-            locationKind: location.locationKind || undefined, // Store original for hierarchy labels
-            backtrace: [], // Empty for LSP path
-          },
-        });
-      } catch (error) {
-        // Log error but continue processing other operators if degraded mode is enabled
-        if (error instanceof Error) {
-          this.log(
-            `WARNING: Error extracting node for operator '${location.operatorName}': ${error.message}`
-          );
-        } else {
-          this.log(`WARNING: Unknown error extracting node: ${String(error)}`);
-        }
-
-        if (!enableDegradedMode) {
-          throw error;
-        }
-        // In degraded mode, skip this node and continue
+  /*
+  // REMAINING OLD METHOD CODE - COMMENTED OUT
+    // Create nodes from LSP locations first (these have rich type information)
+    const lspNodeIds = new Set<string>();
+    
+    for (const location of scopedLocations) {
+      const returnType = location.fullReturnType || location.locationType;
+      
+      // Check if this is a valid dataflow operator
+      if (!this.isValidDataflowOperator(location.operatorName, returnType)) {
+        this.log(
+          `Filtered out ${location.operatorName} - not a dataflow operator (return type: ${returnType || 'unknown'})`
+        );
         continue;
       }
+
+      this.log(`Accepted '${location.operatorName}' as valid dataflow operator (return type: ${returnType || 'unknown'})`);
+
+      const nodeId = String(nodeIdCounter++);
+      const nodeType = this.inferNodeType(location.operatorName);
+      const fullLabel = this.extractFullLabel(document, location.range);
+      
+      nodes.push({
+        id: nodeId,
+        nodeType,
+        shortLabel: location.operatorName,
+        fullLabel,
+        label: location.operatorName,
+        data: {
+          locationId: this.getLocationId(location.locationKind),
+          locationType: this.getLocationType(location.locationKind),
+          locationKind: location.locationKind || undefined,
+          backtrace: [],
+        },
+      });
+
+      // Track this operator so we don't duplicate it from tree-sitter
+      const opKey = `${location.range.start.line}:${location.range.start.character}:${location.operatorName}`;
+      lspNodeIds.add(opKey);
     }
 
-    // Log degraded mode summary
-    if (degradedModeCount > 0) {
-      this.log(
-        `DEGRADED MODE: Extracted ${nodes.length} nodes with ${degradedModeCount} fallback values`
-      );
+    this.log(`Created ${nodes.length} nodes from LSP locations`);
+
+    // Create additional nodes from tree-sitter operators that weren't covered by LSP
+    let syntheticNodeCount = 0;
+    
+    for (const tsOp of allTreeSitterOps) {
+      // Skip if we already have this operator from LSP
+      const opKey = `${tsOp.line}:${tsOp.column}:${tsOp.name}`;
+      if (lspNodeIds.has(opKey)) {
+        continue;
+      }
+
+      // Check if this is a known dataflow operator
+      if (!this.isKnownDataflowOperator(tsOp.name)) {
+        continue;
+      }
+
+      this.log(`Creating synthetic node for tree-sitter operator: ${tsOp.name} at line ${tsOp.line}`);
+
+      const nodeId = String(nodeIdCounter++);
+      const nodeType = this.inferNodeType(tsOp.name);
+      
+      // Create synthetic full label
+      const lineText = document.lineAt(tsOp.line).text;
+      const operatorStart = tsOp.column;
+      const operatorEnd = Math.min(operatorStart + tsOp.name.length, lineText.length);
+      const fullLabel = lineText.substring(operatorStart, Math.min(operatorEnd + 20, lineText.length)).trim();
+      
+      nodes.push({
+        id: nodeId,
+        nodeType,
+        shortLabel: tsOp.name,
+        fullLabel: fullLabel || tsOp.name,
+        label: tsOp.name,
+        data: {
+          locationId: null, // No location info from tree-sitter
+          locationType: null,
+          locationKind: undefined,
+          backtrace: [],
+        },
+      });
+
+      syntheticNodeCount++;
     }
+
+    this.log(`Created ${syntheticNodeCount} synthetic nodes from tree-sitter operators`);
+    this.log(`Total nodes: ${nodes.length} (${nodes.length - syntheticNodeCount} from LSP, ${syntheticNodeCount} synthetic)`);
 
     return nodes;
   }
+  */
 
   /**
    * Extract edges by analyzing dataflow chains
@@ -650,7 +991,12 @@ export class LSPGraphExtractor {
    * @param locations Location information from LocationAnalyzer
    * @returns Promise resolving to array of edges
    */
-  private async extractEdges(
+  // OLD METHOD - REPLACED BY HYBRID APPROACH
+  /*
+  // OLD METHOD - REPLACED BY HYBRID APPROACH  
+  // @ts-expect-error - Keeping for reference, will be removed later
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  private async _extractEdges(
     document: vscode.TextDocument,
     nodes: Node[],
     locations: LocationInfo[]
@@ -686,6 +1032,7 @@ export class LSPGraphExtractor {
 
     return edges;
   }
+  */
 
   /**
    * Track operator usages to identify which variables they consume
@@ -730,7 +1077,6 @@ export class LSPGraphExtractor {
     }
 
     for (const loc of locations) {
-      const lineText = document.lineAt(loc.range.start.line).text;
       const key = `${loc.range.start.line}:${loc.range.start.character}`;
       const node = locationToNode.get(key);
 
@@ -756,39 +1102,8 @@ export class LSPGraphExtractor {
       let consumedVariable: string | null = null;
 
       if (isMainChainOperator) {
-        // Look backwards from the operator position to find the variable
-        // Check current line first
-        const beforeOperator = lineText.substring(0, loc.range.start.character);
-
-        // Check each known variable name
-        for (const varName of varNames) {
-          // Pattern: varname.operator or varname .operator (with whitespace)
-          const pattern = new RegExp(`\\b${varName}\\s*\\.\\s*$`);
-          if (pattern.test(beforeOperator)) {
-            consumedVariable = varName;
-            break;
-          }
-        }
-
-        // If not found on current line, check if previous line ends with a variable name
-        // This handles multi-line chains like:
-        //   let x = varname
-        //       .operator()
-        if (!consumedVariable && loc.range.start.line > 0) {
-          const prevLineText = document.lineAt(loc.range.start.line - 1).text.trim();
-
-          for (const varName of varNames) {
-            // Check if previous line is just the variable name or ends with variable name
-            if (
-              prevLineText === varName ||
-              prevLineText.endsWith(` ${varName}`) ||
-              prevLineText.endsWith(`=${varName}`)
-            ) {
-              consumedVariable = varName;
-              break;
-            }
-          }
-        }
+        // Use the shared helper to detect variable references
+        consumedVariable = this.detectVariableReference(document, loc.range.start.line, varNames);
       }
 
       usages.push({
@@ -877,48 +1192,142 @@ export class LSPGraphExtractor {
     locationToNode: Map<string, Node>
   ): OperatorInfo | null {
     // Find the LocationInfo that matches this tree-sitter operator
-    // Match by line and operator name
-    for (const loc of locations) {
-      if (loc.range.start.line === tsOp.line && loc.operatorName === tsOp.name) {
-        const key = `${loc.range.start.line}:${loc.range.start.character}`;
-        const node = locationToNode.get(key);
+    // Use flexible matching: same line and operator name, with coordinate tolerance
+    const candidates = locations.filter(
+      (loc) => loc.range.start.line === tsOp.line && loc.operatorName === tsOp.name
+    );
 
-        if (!node) {
-          this.log(
-            `[findOperatorInfo] No node found for key ${key} (${tsOp.name} at line ${tsOp.line})`
-          );
-          continue;
-        }
+    // If we have multiple candidates on the same line, pick the closest one by column
+    let bestMatch: LocationInfo | null = null;
+    let bestDistance = Infinity;
 
-        const returnType = loc.fullReturnType || null;
-
-        // Skip location constructors (they don't produce dataflow)
-        // Only include Hydro dataflow operators
-        if (returnType && !this.isValidDataflowOperator(tsOp.name, returnType)) {
-          this.log(
-            `[findOperatorInfo] Filtered out ${tsOp.name} at line ${tsOp.line} - non-dataflow type: ${returnType}`
-          );
-          continue;
-        }
-
-        // If no return type is available, log it but allow the operator through
-        if (!returnType) {
-          this.log(
-            `[findOperatorInfo] WARNING: ${tsOp.name} at line ${tsOp.line} has no return type information - including anyway`
-          );
-        }
-
-        return {
-          name: loc.operatorName,
-          range: loc.range,
-          returnType,
-          locationInfo: loc,
-          nodeId: node.id,
-        };
+    for (const loc of candidates) {
+      const distance = Math.abs(loc.range.start.character - tsOp.column);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestMatch = loc;
       }
     }
 
-    this.log(`[findOperatorInfo] No matching location found for ${tsOp.name} at line ${tsOp.line}`);
+    if (!bestMatch) {
+      // Fallback 1: try to find any operator with the same name on nearby lines (±3 lines)
+      for (let lineOffset = -3; lineOffset <= 3; lineOffset++) {
+        const targetLine = tsOp.line + lineOffset;
+        const nearbyCandidate = locations.find(
+          (loc) => loc.range.start.line === targetLine && loc.operatorName === tsOp.name
+        );
+        if (nearbyCandidate) {
+          bestMatch = nearbyCandidate;
+          this.log(
+            `[findOperatorInfo] Using nearby match for ${tsOp.name}: line ${targetLine} (offset ${lineOffset})`
+          );
+          break;
+        }
+      }
+    }
+
+    if (!bestMatch) {
+      // Fallback 2: try to find any operator with the same name anywhere (relaxed matching)
+      const anyMatch = locations.find((loc) => loc.operatorName === tsOp.name);
+      if (anyMatch) {
+        bestMatch = anyMatch;
+        this.log(
+          `[findOperatorInfo] Using relaxed match for ${tsOp.name}: found at line ${anyMatch.range.start.line} (tree-sitter expected line ${tsOp.line})`
+        );
+      }
+    }
+
+    if (!bestMatch) {
+      // Fallback 3: Create synthetic location info for known operators without LSP data
+      if (this.isKnownDataflowOperator(tsOp.name)) {
+        this.log(
+          `[findOperatorInfo] Creating synthetic location for known operator ${tsOp.name} at line ${tsOp.line}`
+        );
+
+        // Create a synthetic LocationInfo for this operator
+        const syntheticLocation: LocationInfo = {
+          operatorName: tsOp.name,
+          range: new vscode.Range(
+            new vscode.Position(tsOp.line, tsOp.column),
+            new vscode.Position(tsOp.line, tsOp.column + tsOp.name.length)
+          ),
+          locationType: 'Unknown',
+          locationKind: 'Process<Leader>',
+          fullReturnType: undefined,
+        };
+
+        bestMatch = syntheticLocation;
+      }
+    }
+
+    if (!bestMatch) {
+      this.log(
+        `[findOperatorInfo] No matching location found for ${tsOp.name} at line ${tsOp.line}`
+      );
+      return null;
+    }
+
+    const key = `${bestMatch.range.start.line}:${bestMatch.range.start.character}`;
+    const node = locationToNode.get(key);
+
+    if (!node) {
+      // For synthetic locations, we need to create a synthetic node
+      if (bestMatch && !bestMatch.locationKind && this.isKnownDataflowOperator(tsOp.name)) {
+        this.log(
+          `[findOperatorInfo] Creating synthetic node for ${tsOp.name} at line ${tsOp.line}`
+        );
+
+        // Create a synthetic node ID
+        const syntheticNodeId = `synthetic_${tsOp.name}_${tsOp.line}_${tsOp.column}`;
+
+        // We'll need to add this to the locationToNode map, but for now return the info
+        // The caller will need to handle synthetic nodes appropriately
+        return {
+          name: tsOp.name,
+          range: bestMatch.range,
+          returnType: null,
+          locationInfo: bestMatch,
+          nodeId: syntheticNodeId,
+        };
+      }
+
+      this.log(
+        `[findOperatorInfo] No node found for key ${key} (${tsOp.name} at line ${tsOp.line})`
+      );
+      return null;
+    }
+
+    const returnType = bestMatch.fullReturnType || null;
+
+    // Skip location constructors (they don't produce dataflow)
+    // Only include Hydro dataflow operators
+    if (returnType && !this.isValidDataflowOperator(tsOp.name, returnType)) {
+      this.log(
+        `[findOperatorInfo] Filtered out ${tsOp.name} at line ${tsOp.line} - non-dataflow type: ${returnType}`
+      );
+      return null;
+    }
+
+    // If no return type is available, check if it's a known dataflow operator
+    if (!returnType) {
+      if (this.isKnownDataflowOperator(tsOp.name)) {
+        this.log(
+          `[findOperatorInfo] No return type for ${tsOp.name} at line ${tsOp.line}, but it's a known dataflow operator - including`
+        );
+      } else {
+        this.log(
+          `[findOperatorInfo] WARNING: ${tsOp.name} at line ${tsOp.line} has no return type and is not a known dataflow operator - including anyway`
+        );
+      }
+    }
+
+    return {
+      name: bestMatch.operatorName,
+      range: bestMatch.range,
+      returnType,
+      locationInfo: bestMatch,
+      nodeId: node.id,
+    };
     return null;
   }
 
@@ -997,6 +1406,8 @@ export class LSPGraphExtractor {
    * @param nodes Previously extracted nodes
    * @returns Promise resolving to array of operator chains
    */
+  // @ts-expect-error - Old method, will be removed
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private async buildOperatorChains(
     document: vscode.TextDocument,
     locations: LocationInfo[],
@@ -1247,6 +1658,134 @@ export class LSPGraphExtractor {
   }
 
   /**
+   * Parse Hydro type parameters from a generic type string
+   *
+   * Examples:
+   * - "Stream<String, Process<'_, Leader>, Unbounded, TotalOrder, ExactlyOnce>"
+   *   -> ["String", "Process<'_, Leader>", "Unbounded", "TotalOrder", "ExactlyOnce"]
+   * - "KeyedSingleton<String, i32, Tick<Cluster<'_, Worker>>, Bounded::WhenValueUnbounded>"
+   *   -> ["String", "i32", "Tick<Cluster<'_, Worker>>", "Bounded::WhenValueUnbounded"]
+   */
+  private parseHydroTypeParameters(typeString: string): string[] {
+    try {
+      // Find the main generic part: Type<...>
+      const match = typeString.match(/^[^<]+<(.+)>$/);
+      if (!match) {
+        return [];
+      }
+
+      const params = match[1];
+      const result: string[] = [];
+      let current = '';
+      let angleDepth = 0;
+      let parenDepth = 0;
+
+      for (let i = 0; i < params.length; i++) {
+        const char = params[i];
+
+        if (char === '<') {
+          angleDepth++;
+          current += char;
+        } else if (char === '>') {
+          angleDepth--;
+          current += char;
+        } else if (char === '(') {
+          parenDepth++;
+          current += char;
+        } else if (char === ')') {
+          parenDepth--;
+          current += char;
+        } else if (char === ',' && angleDepth === 0 && parenDepth === 0) {
+          const trimmed = current.trim();
+          if (trimmed) {
+            result.push(trimmed);
+          }
+          current = '';
+        } else {
+          current += char;
+        }
+      }
+
+      const trimmed = current.trim();
+      if (trimmed) {
+        result.push(trimmed);
+      }
+
+      return result;
+    } catch (error) {
+      this.log(`WARNING: Error parsing type parameters from '${typeString}': ${error}`);
+      return [];
+    }
+  }
+
+  /**
+   * Extract boundedness information from type parameters
+   * Handles both simple forms (Bounded, Unbounded) and qualified paths (Bounded::UnderlyingBound)
+   * Also handles generic type parameters (B) by providing reasonable defaults
+   */
+  private extractBoundedness(typeParams: string[]): string | null {
+    for (const param of typeParams) {
+      const trimmed = param.trim();
+
+      if (trimmed.startsWith('Bounded')) {
+        return 'Bounded';
+      } else if (trimmed.startsWith('Unbounded')) {
+        return 'Unbounded';
+      }
+
+      // Handle generic type parameters for boundedness
+      // In Hydro, the boundedness parameter is typically named B
+      if (trimmed === 'B' || trimmed.match(/^B\b/)) {
+        // For generic B parameter, default to Unbounded (most common case)
+        return 'Unbounded';
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Extract ordering information from type parameters
+   * Handles both simple forms (TotalOrder, NoOrder) and complex associated types
+   * Also handles generic type parameters (O) by providing reasonable defaults
+   */
+  private extractOrdering(typeParams: string[]): string | null {
+    for (const param of typeParams) {
+      const trimmed = param.trim();
+
+      // Check for TotalOrder variants (including associated types)
+      if (trimmed === 'TotalOrder' || trimmed.includes('TotalOrder')) {
+        return 'TotalOrder';
+      }
+
+      // Check for NoOrder variants (including associated types)
+      if (trimmed === 'NoOrder' || trimmed.includes('NoOrder')) {
+        return 'NoOrder';
+      }
+
+      // Handle generic type parameters for ordering
+      // In Hydro, the ordering parameter is typically named O
+      if (trimmed === 'O' || trimmed.match(/^O\b/)) {
+        // For generic O parameter, default to NoOrder (most common case)
+        return 'NoOrder';
+      }
+
+      // Handle associated types that resolve to ordering types
+      // Pattern: <SomeType as SomeTrait<OrderingType>>::AssociatedType
+      const associatedTypeMatch = trimmed.match(/<[^>]*as[^>]*<([^>]*)>[^>]*>::/);
+      if (associatedTypeMatch) {
+        const innerType = associatedTypeMatch[1];
+        if (innerType.includes('TotalOrder')) {
+          return 'TotalOrder';
+        }
+        if (innerType.includes('NoOrder')) {
+          return 'NoOrder';
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
    * Extract semantic tags from return type information
    *
    * Parses return type generic parameters to infer edge properties:
@@ -1271,6 +1810,8 @@ export class LSPGraphExtractor {
    * @param targetLocation Location info for target operator
    * @returns Array of semantic tag strings, sorted for deterministic output
    */
+  // @ts-expect-error - Old method, will be removed
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private extractSemanticTags(
     returnType: string | null,
     sourceLocation: LocationInfo,
@@ -1285,12 +1826,15 @@ export class LSPGraphExtractor {
       usedDefaults = true;
       this.log('WARNING: No return type information, using minimal semantic tags (degraded mode)');
     } else {
+      // Clean up the type string (remove leading colons, etc.)
+      const cleanReturnType = returnType.replace(/^:\s*/, '').trim();
+
       // Collection type (Stream, Singleton, Optional)
-      if (returnType.includes('Stream<')) {
+      if (cleanReturnType.includes('Stream<')) {
         tags.push('Stream');
-      } else if (returnType.includes('Singleton<')) {
+      } else if (cleanReturnType.includes('Singleton<')) {
         tags.push('Singleton');
-      } else if (returnType.includes('Optional<')) {
+      } else if (cleanReturnType.includes('Optional<')) {
         tags.push('Optional');
       } else {
         // Default to Stream if not specified
@@ -1298,35 +1842,55 @@ export class LSPGraphExtractor {
         usedDefaults = true;
       }
 
-      // Boundedness (Bounded, Unbounded)
-      if (returnType.includes('Bounded')) {
-        tags.push('Bounded');
-      } else if (returnType.includes('Unbounded')) {
-        tags.push('Unbounded');
+      // Parse type parameters using a more robust approach
+      const typeParams = this.parseHydroTypeParameters(cleanReturnType);
+
+      // Debug logging for generic types
+      if (
+        typeParams.length > 0 &&
+        (typeParams.includes('T') ||
+          typeParams.includes('L') ||
+          typeParams.includes('B') ||
+          typeParams.includes('O'))
+      ) {
+        this.log(`DEBUG: Parsing generic type '${cleanReturnType}' -> [${typeParams.join(', ')}]`);
+      }
+
+      // Boundedness - look for the boundedness parameter
+      // For Stream<T, Location, Boundedness, ...>: 3rd parameter (index 2)
+      // For KeyedStream<K, V, Location, Boundedness, ...>: 4th parameter (index 3)
+      // For KeyedSingleton<K, V, Location, Boundedness>: 4th parameter (index 3)
+      const boundedness = this.extractBoundedness(typeParams);
+      if (boundedness) {
+        tags.push(boundedness);
       } else {
         // Default to Unbounded
         tags.push('Unbounded');
         usedDefaults = true;
       }
 
-      // Ordering (TotalOrder, NoOrder)
-      if (returnType.includes('TotalOrder')) {
-        tags.push('TotalOrder');
-      } else if (returnType.includes('NoOrder')) {
+      // Ordering - look for the ordering parameter (4th parameter for most types)
+      // Note: KeyedSingleton and Singleton types don't have ordering parameters
+      const ordering = this.extractOrdering(typeParams);
+      if (ordering) {
+        tags.push(ordering);
+      } else if (
+        cleanReturnType.includes('Singleton<') ||
+        cleanReturnType.includes('KeyedSingleton<')
+      ) {
+        // Singleton types don't have ordering - this is expected, not a degraded mode
         tags.push('NoOrder');
       } else {
-        // Default to NoOrder
+        // Default to NoOrder for other types
         tags.push('NoOrder');
         usedDefaults = true;
       }
 
-      // Keyedness (Keyed, NotKeyed)
-      if (returnType.includes('Keyed')) {
+      // Keyedness - check if it's a Keyed collection type
+      if (cleanReturnType.includes('KeyedStream<') || cleanReturnType.includes('KeyedSingleton<')) {
         tags.push('Keyed');
       } else {
-        // Default to NotKeyed
         tags.push('NotKeyed');
-        usedDefaults = true;
       }
 
       if (usedDefaults) {
@@ -1380,6 +1944,8 @@ export class LSPGraphExtractor {
    * @param _document The document being analyzed (unused but kept for future use)
    * @returns Filtered array of LocationInfo
    */
+  // @ts-expect-error - Old method, will be removed
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private filterToScope(
     locations: LocationInfo[],
     scopeTarget: ScopeTarget,
@@ -1439,108 +2005,182 @@ export class LSPGraphExtractor {
    * @param nodes Previously extracted nodes
    * @returns HierarchyData containing hierarchy choices and node assignments
    */
-  private buildLocationHierarchy(nodes: Node[]): HierarchyData {
-    // Group nodes by their location
-    // We use locationId as the grouping key since it's derived from locationKind
-    // which includes the type parameter (e.g., "Process<Leader>" vs "Process<Follower>")
-    const locationGroups = new Map<string, { nodes: Node[]; locationKind: string | null }>();
-    let nodesWithoutLocation = 0;
+  private buildLocationAndCodeHierarchies(
+    document: vscode.TextDocument,
+    nodes: Node[],
+    edges: Edge[]
+  ): HierarchyData {
+    // Build nested Tick hierarchy: base location (e.g., Worker), with children
+    // Tick<Worker>, Tick<Tick<Worker>>, etc. Assign each node to the deepest
+    // matching container based on the Tick depth present in its locationKind.
 
-    for (const node of nodes) {
-      try {
-        // Create a unique key for this location
-        // Format: "locationType_locationId" (e.g., "Process_12345", "Cluster_67890")
-        const locationType = node.data.locationType || 'Unknown';
-        const locationId = node.data.locationId !== null ? node.data.locationId : -1;
-        const locationKey = `${locationType}_${locationId}`;
-
-        // Track nodes without proper location info
-        if (locationType === 'Unknown' || locationId === -1) {
-          nodesWithoutLocation++;
-        }
-
-        if (!locationGroups.has(locationKey)) {
-          locationGroups.set(locationKey, {
-            nodes: [],
-            locationKind: node.data.locationKind || null,
-          });
-        }
-        locationGroups.get(locationKey)!.nodes.push(node);
-      } catch (error) {
-        // Handle errors gracefully in degraded mode
-        this.log(
-          `WARNING: Error grouping node ${node.id}, will assign to default container (degraded mode)`
-        );
-        nodesWithoutLocation++;
-
-        // Add to a special error group
-        const errorKey = 'Unknown_-1';
-        if (!locationGroups.has(errorKey)) {
-          locationGroups.set(errorKey, {
-            nodes: [],
-            locationKind: null,
-          });
-        }
-        locationGroups.get(errorKey)!.nodes.push(node);
-      }
-    }
-
-    this.log(`Grouped nodes into ${locationGroups.size} location containers`);
-    if (nodesWithoutLocation > 0) {
-      this.log(
-        `WARNING: ${nodesWithoutLocation} nodes without complete location information (degraded mode)`
-      );
-    }
-
-    // Build hierarchy containers
-    const children: HierarchyContainer[] = [];
     const nodeAssignments: Record<string, string> = {};
     let containerIdCounter = 0;
 
-    for (const [_locationKey, group] of locationGroups) {
-      try {
-        // Generate unique container ID (loc_0, loc_1, etc.)
-        const containerId = `loc_${containerIdCounter++}`;
+    // Build adjacency for all nodes using edges (undirected for connectivity)
+    const adjacency = new Map<string, Set<string>>();
+    const addEdge = (a: string, b: string) => {
+      if (!adjacency.has(a)) adjacency.set(a, new Set());
+      if (!adjacency.has(b)) adjacency.set(b, new Set());
+      adjacency.get(a)!.add(b);
+      adjacency.get(b)!.add(a);
+    };
+    for (const e of edges) {
+      addEdge(e.source, e.target);
+    }
 
-        // Extract location label from locationKind
-        // This extracts type parameter names (e.g., "Leader", "Worker", "Proposer")
-        const containerName = this.extractLocationLabel(group.locationKind);
+    // Precompute base label and tick depth for each node
+    interface LocMeta {
+      base: string;
+      depth: number;
+      kind: string | null;
+    }
+    const metaById = new Map<string, LocMeta>();
+    const nodesByBase = new Map<string, Node[]>();
+    const unknownNodes: Node[] = [];
+    for (const n of nodes) {
+      const kind = n.data.locationKind || null;
+      if (!kind) {
+        unknownNodes.push(n);
+        continue;
+      }
+      const base = this.extractLocationLabel(kind);
+      const depth = this.countTickDepth(kind);
+      metaById.set(n.id, { base, depth, kind });
+      if (!nodesByBase.has(base)) nodesByBase.set(base, []);
+      nodesByBase.get(base)!.push(n);
+    }
 
-        // Create hierarchy container with flat structure (no nested children)
-        children.push({
-          id: containerId,
-          name: containerName,
-          children: [], // Flat hierarchy - no nested containers
-        });
+    // Helper to compute connected components for a filtered set of node IDs
+    const computeComponents = (allowed: Set<string>): string[][] => {
+      const visited = new Set<string>();
+      const comps: string[][] = [];
+      for (const id of allowed) {
+        if (visited.has(id)) continue;
+        const comp: string[] = [];
+        const q: string[] = [id];
+        visited.add(id);
+        while (q.length) {
+          const cur = q.pop()!;
+          comp.push(cur);
+          const neigh = adjacency.get(cur);
+          if (!neigh) continue;
+          for (const nb of neigh) {
+            if (!visited.has(nb) && allowed.has(nb)) {
+              visited.add(nb);
+              q.push(nb);
+            }
+          }
+        }
+        comps.push(comp);
+      }
+      return comps;
+    };
 
-        // Assign all nodes in this location to the container
-        for (const node of group.nodes) {
-          nodeAssignments[node.id] = containerId;
+    // Build base location roots
+    const rootsByLabel = new Map<string, HierarchyContainer>();
+    const children: HierarchyContainer[] = [];
+    for (const [base, baseNodes] of nodesByBase.entries()) {
+      const root: HierarchyContainer = {
+        id: `loc_${containerIdCounter++}`,
+        name: base,
+        children: [],
+      };
+      rootsByLabel.set(base, root);
+      children.push(root);
+
+      // Determine max depth present for this base
+      let maxDepth = 0;
+      for (const n of baseNodes) {
+        const m = metaById.get(n.id)!;
+        if (m.depth > maxDepth) maxDepth = m.depth;
+      }
+
+      // Mapping node -> container at previous level (for parenting)
+      const parentAtLevel = new Map<number, Map<string, string>>();
+
+      // Level 1..maxDepth: split by connected components of nodes with depth >= level
+      for (let level = 1; level <= maxDepth; level++) {
+        const allowed = new Set<string>();
+        for (const n of baseNodes) {
+          const m = metaById.get(n.id)!;
+          if (m.depth >= level) {
+            allowed.add(n.id);
+          }
+        }
+        if (allowed.size === 0) continue;
+
+        const comps = computeComponents(allowed);
+        const mapThisLevel = new Map<string, string>();
+
+        for (const comp of comps) {
+          // Determine parent container for this component
+          let parentContainer: HierarchyContainer = root;
+          if (level > 1) {
+            const parentMap = parentAtLevel.get(level - 1)!;
+            // Pick the first node's parent (components shouldn't cross parents)
+            for (const nid of comp) {
+              const pid = parentMap.get(nid);
+              if (pid) {
+                // Find the actual container reference by walking tree (small N, so simple search)
+                const stack: HierarchyContainer[] = [root];
+                while (stack.length) {
+                  const c = stack.pop()!;
+                  if (c.id === pid) {
+                    parentContainer = c;
+                    break;
+                  }
+                  for (const ch of c.children) stack.push(ch);
+                }
+                break;
+              }
+            }
+          }
+
+          const name = this.buildTickLabel(base, level);
+          const cont: HierarchyContainer = {
+            id: `loc_${containerIdCounter++}`,
+            name,
+            children: [],
+          };
+          parentContainer.children.push(cont);
+
+          // Record parent for nodes in this component
+          for (const nid of comp) {
+            mapThisLevel.set(nid, cont.id);
+          }
         }
 
-        this.log(
-          `Created container '${containerId}' (${containerName}) with ${group.nodes.length} nodes`
-        );
-      } catch (error) {
-        // Log error but continue with other containers
-        this.log(`WARNING: Error creating container for location group (degraded mode)`);
+        parentAtLevel.set(level, mapThisLevel);
+      }
+
+      // Assign nodes to deepest level container matching their depth
+      for (const n of baseNodes) {
+        const m = metaById.get(n.id)!;
+        if (m.depth === 0) {
+          nodeAssignments[n.id] = root.id;
+        } else {
+          const mapForDepth = parentAtLevel.get(m.depth);
+          if (mapForDepth && mapForDepth.get(n.id)) {
+            nodeAssignments[n.id] = mapForDepth.get(n.id)!;
+          } else {
+            // Fallback: assign to root if no mapping found (shouldn't happen)
+            nodeAssignments[n.id] = root.id;
+          }
+        }
       }
     }
+
+    // Collect top-level children
+    // children already collected during roots build
 
     // Handle nodes without location information (assign to default container)
     // This addresses requirement 3.5 and degraded mode requirement 6.4
     const unassignedNodes = nodes.filter((node) => !(node.id in nodeAssignments));
     if (unassignedNodes.length > 0) {
       const defaultContainerId = `loc_${containerIdCounter++}`;
-      children.push({
-        id: defaultContainerId,
-        name: '(unknown location)',
-        children: [],
-      });
-
-      for (const node of unassignedNodes) {
-        nodeAssignments[node.id] = defaultContainerId;
-      }
+      children.push({ id: defaultContainerId, name: '(unknown location)', children: [] });
+      for (const node of unassignedNodes) nodeAssignments[node.id] = defaultContainerId;
 
       this.log(
         `DEGRADED MODE: Created default container '${defaultContainerId}' for ${unassignedNodes.length} unassigned nodes`
@@ -1559,21 +2199,202 @@ export class LSPGraphExtractor {
     }
 
     // Build the complete hierarchy structure
+    // Build Code hierarchy: file -> function -> variable
+    const codeChildren: HierarchyContainer[] = [];
+    const codeAssignments: Record<string, string> = {};
+    let codeIdCounter = containerIdCounter;
+
+    const fileLabel = path.basename(document.fileName);
+    const fileContainer: HierarchyContainer = {
+      id: `code_${codeIdCounter++}`,
+      name: fileLabel,
+      children: [],
+    };
+    codeChildren.push(fileContainer);
+
+    // Helper maps (do not push children yet; finalize after we know which have nodes)
+    const functionMap = new Map<string, HierarchyContainer>();
+    const variableMap = new Map<string, HierarchyContainer>();
+    const containerAssignmentCount: Record<string, number> = {};
+
+    const bumpCount = (id: string) => {
+      containerAssignmentCount[id] = (containerAssignmentCount[id] || 0) + 1;
+    };
+
+    const getFunctionContainer = (fnNameRaw: string): HierarchyContainer => {
+      const fnName = `fn ${fnNameRaw}`; // label functions distinctly
+      if (functionMap.has(fnName)) return functionMap.get(fnName)!;
+      const fnContainer: HierarchyContainer = {
+        id: `code_${codeIdCounter++}`,
+        name: fnName,
+        children: [],
+      };
+      functionMap.set(fnName, fnContainer);
+      return fnContainer;
+    };
+
+    const getVariableContainer = (
+      fnContainer: HierarchyContainer,
+      varName: string
+    ): HierarchyContainer => {
+      const key = `${fnContainer.id}:${varName}`;
+      if (variableMap.has(key)) return variableMap.get(key)!;
+      const varContainer: HierarchyContainer = {
+        id: `code_${codeIdCounter++}`,
+        name: varName,
+        children: [],
+      };
+      variableMap.set(key, varContainer);
+      return varContainer;
+    };
+
+    // Build mapping from tree-sitter positions to node IDs for assignment
+    const nodeByPos = new Map<string, Node>();
+    for (const n of nodes) {
+      const pos = n.data.treeSitterPosition;
+      if (pos) nodeByPos.set(`${pos.line}:${pos.column}:${n.shortLabel}`, n);
+    }
+
+    // Variable chains → assign operator nodes into variable containers
+    const varChains = this.treeSitterParser.parseVariableBindings(document);
+    for (const binding of varChains) {
+      const fnName =
+        this.treeSitterParser.findEnclosingFunctionName(document, binding.line) || '(top-level)';
+      const fnContainer = getFunctionContainer(fnName);
+      const varContainer = getVariableContainer(fnContainer, binding.varName);
+
+      for (const op of binding.operators) {
+        const node = nodeByPos.get(`${op.line}:${op.column}:${op.name}`);
+        if (node) {
+          codeAssignments[node.id] = varContainer.id;
+          bumpCount(varContainer.id);
+        }
+      }
+    }
+
+    // Standalone chains → assign operator nodes directly to function containers
+    const standaloneChains = this.treeSitterParser.parseStandaloneChains(document);
+    for (const chain of standaloneChains) {
+      if (chain.length === 0) continue;
+      const fnName =
+        this.treeSitterParser.findEnclosingFunctionName(document, chain[0].line) || '(top-level)';
+      const fnContainer = getFunctionContainer(fnName);
+      for (const op of chain) {
+        const node = nodeByPos.get(`${op.line}:${op.column}:${op.name}`);
+        if (node && !(node.id in codeAssignments)) {
+          codeAssignments[node.id] = fnContainer.id;
+          bumpCount(fnContainer.id);
+        }
+      }
+    }
+
+    // Any remaining nodes without code assignment → put under file container
+    for (const n of nodes) {
+      if (!(n.id in codeAssignments)) {
+        codeAssignments[n.id] = fileContainer.id;
+        bumpCount(fileContainer.id);
+      }
+    }
+
+    // Finalize hierarchy: add only containers with assignments
+    // Add function containers with either their own assignments or variable children with assignments
+    for (const [, fnContainer] of functionMap.entries()) {
+      // Collect variable children for this function
+      const variableChildren: HierarchyContainer[] = [];
+      for (const [key, varContainer] of variableMap.entries()) {
+        if (key.startsWith(fnContainer.id + ':')) {
+          if ((containerAssignmentCount[varContainer.id] || 0) > 0) {
+            variableChildren.push(varContainer);
+          }
+        }
+      }
+
+      const hasFnAssignments = (containerAssignmentCount[fnContainer.id] || 0) > 0;
+      const hasVarAssignments = variableChildren.length > 0;
+      if (hasFnAssignments || hasVarAssignments) {
+        fnContainer.children = variableChildren;
+        fileContainer.children.push(fnContainer);
+      }
+    }
+
+    // Collapse single-child container chains (avoid collapsing the file container)
+    const reassignAll = (fromId: string, toId: string) => {
+      for (const [nodeId, cid] of Object.entries(codeAssignments)) {
+        if (cid === fromId) {
+          codeAssignments[nodeId] = toId;
+        }
+      }
+      containerAssignmentCount[toId] =
+        (containerAssignmentCount[toId] || 0) + (containerAssignmentCount[fromId] || 0);
+      delete containerAssignmentCount[fromId];
+    };
+
+    const collapseChains = (container: HierarchyContainer, isTopLevel: boolean) => {
+      // First collapse children
+      for (const child of container.children) {
+        collapseChains(child, false);
+      }
+
+      // Then attempt to collapse this container if it has exactly one child and no direct assignments
+      if (!isTopLevel && container.children.length === 1) {
+        const onlyChild = container.children[0];
+        const thisCount = containerAssignmentCount[container.id] || 0;
+        if (thisCount === 0) {
+          // Merge: move assignments from child to this container, adopt grandchildren, and combine name
+          reassignAll(onlyChild.id, container.id);
+          container.name = `${container.name}→${onlyChild.name}`;
+          container.children = onlyChild.children;
+        }
+      }
+    };
+
+    collapseChains(fileContainer, true);
+
     const hierarchyChoices: Hierarchy[] = [
-      {
-        id: 'location',
-        name: 'Location',
-        children,
-      },
+      { id: 'location', name: 'Location', children },
+      { id: 'code', name: 'Code', children: codeChildren },
     ];
 
     return {
       hierarchyChoices,
       nodeAssignments: {
         location: nodeAssignments,
+        code: codeAssignments,
       },
       selectedHierarchy: 'location',
     };
+  }
+
+  /**
+   * Count nested Tick<> wrappers around a location kind string
+   * Examples:
+   * - "Process<Worker>" -> 0
+   * - "Tick<Process<Worker>>" -> 1
+   * - "Tick<Tick<Cluster<Leader>>>>" -> 2
+   */
+  private countTickDepth(locationKind: string): number {
+    let depth = 0;
+    let current = locationKind.trim();
+    while (current.startsWith('Tick<') && current.endsWith('>')) {
+      depth++;
+      current = current.substring(5, current.length - 1).trim();
+    }
+    return depth;
+  }
+
+  /**
+   * Build a nested Tick label for a given base label and depth
+   * depth=0 -> baseLabel
+   * depth=1 -> Tick<baseLabel>
+   * depth=2 -> Tick<Tick<baseLabel>>
+   */
+  private buildTickLabel(baseLabel: string, depth: number): string {
+    if (depth <= 0) return baseLabel;
+    let label = baseLabel;
+    for (let i = 0; i < depth; i++) {
+      label = `Tick<${label}>`;
+    }
+    return label;
   }
 
   /**
@@ -1658,7 +2479,9 @@ export class LSPGraphExtractor {
 
     // Network operators: send/receive across locations
     if (
-      /^(send_bincode|broadcast_bincode|send_bytes|broadcast_bytes|network)$/.test(operatorName)
+      /^(send_bincode|broadcast_bincode|demux_bincode|round_robin_bincode|send_bytes|broadcast_bytes|demux_bytes|network)$/.test(
+        operatorName
+      )
     ) {
       return 'Network';
     }
@@ -1833,40 +2656,225 @@ export class LSPGraphExtractor {
     return normalized;
   }
 
-
-
   /**
    * Check if an operator is a valid dataflow operator based on its return type
    *
    * Valid dataflow operators are those that either:
    * 1. Return Hydro live collection types (Stream, KeyedStream, Singleton, KeyedSingleton, Optional)
    * 2. Are sink operators that consume live collections and return unit type ()
+   * 3. Are known dataflow operators by name (when type info is unavailable)
    *
-   * This is the authoritative filtering based on actual return types from LSP.
+   * This filtering is based on the canonical HydroNode IR definitions and includes
+   * networking operators that are essential parts of Hydro dataflow pipelines.
    */
   private isValidDataflowOperator(operatorName: string, returnType: string | null): boolean {
-    // If no return type available, we can't make a type-based decision
+    // If no return type available, use name-based heuristics for known dataflow operators
     if (!returnType) {
-      return false;
+      return this.isKnownDataflowOperator(operatorName);
     }
 
-    // Accept operators that return live collection types
+    // Accept operators that return live collection types (canonical Hydro collections)
+    // This includes networking operators like broadcast_bincode that return Stream<T, Cluster<...>, ...>
+    const config = this.getOperatorConfig();
     if (
-      returnType.includes('Stream') ||
-      returnType.includes('Singleton') ||
-      returnType.includes('Optional') ||
-      returnType.includes('KeyedStream') ||
-      returnType.includes('KeyedSingleton')
+      config.collectionTypes.some((collectionType: string) => returnType.includes(collectionType))
     ) {
       return true;
     }
 
     // Accept sink operators that return unit type ()
+    // If return type is strictly unit, accept regardless of operator name (common pattern like `collect`)
+    if (returnType.trim() === '()') {
+      return true;
+    }
     if (returnType.includes('()') && this.isSinkOperator(operatorName)) {
       return true;
     }
 
-    return false;
+    // Accept operators that return impl Into<Collection> (common Hydro pattern)
+    if (
+      returnType.includes('impl Into<') &&
+      config.collectionTypes.some((collectionType: string) =>
+        returnType.includes(collectionType.replace('<', ''))
+      )
+    ) {
+      return true;
+    }
+
+    // Special case: Accept networking operators even if LSP returns incomplete type info
+    // These are crucial parts of Hydro distributed dataflow pipelines
+    if (this.isNetworkingOperator(operatorName)) {
+      this.log(
+        `Accepting networking operator ${operatorName} despite incomplete type info: ${returnType || 'null'}`
+      );
+      return true;
+    }
+
+    // Reject pure infrastructure operators that only return location types without collections
+    // But be careful not to reject networking operators that might have incomplete type info
+    if (
+      returnType.includes('Process<') ||
+      returnType.includes('Cluster<') ||
+      returnType.includes('Tick<') ||
+      returnType.includes('Atomic<')
+    ) {
+      // Double-check: if it's a known networking operator, accept it anyway
+      if (this.isNetworkingOperator(operatorName)) {
+        this.log(
+          `Accepting networking operator ${operatorName} despite location-type return: ${returnType}`
+        );
+        return true;
+      }
+      return false;
+    }
+
+    // Fallback to name-based heuristics for edge cases
+    return this.isKnownDataflowOperator(operatorName);
+  }
+
+  /**
+   * Get the current operator configuration from VS Code settings
+   */
+  private getOperatorConfig() {
+    type VSConfig = { get: (key: string, defaultValue: unknown) => unknown };
+    try {
+      const ws = (
+        vscode as unknown as { workspace?: { getConfiguration?: (section: string) => VSConfig } }
+      ).workspace;
+      if (ws && typeof ws.getConfiguration === 'function') {
+        const config = ws.getConfiguration('hydroIde.operators') as VSConfig;
+        return {
+          networkingOperators: (config.get('networkingOperators', []) as string[]) || [],
+          coreDataflowOperators: (config.get('coreDataflowOperators', []) as string[]) || [],
+          sinkOperators: (config.get('sinkOperators', []) as string[]) || [],
+          collectionTypes: (config.get('collectionTypes', []) as string[]) || [],
+        };
+      }
+    } catch (_) {
+      // fall through to defaults
+    }
+
+    // Fallback defaults for unit test environment (mirrors package.json defaults)
+    return {
+      networkingOperators: [
+        'send_bincode',
+        'round_robin_bincode',
+        'recv_bincode',
+        'broadcast_bincode',
+        'demux_bincode',
+        'send_bincode_external',
+        'recv_bincode_external',
+        'send_bytes',
+        'recv_bytes',
+        'broadcast_bytes',
+        'demux_bytes',
+        'send_bytes_external',
+        'recv_bytes_external',
+        'connect',
+        'disconnect',
+      ],
+      coreDataflowOperators: [
+        'map',
+        'flat_map',
+        'filter',
+        'filter_map',
+        'scan',
+        'enumerate',
+        'inspect',
+        'unique',
+        'sort',
+        'fold',
+        'reduce',
+        'fold_keyed',
+        'reduce_keyed',
+        'reduce_watermark_commutative',
+        'fold_commutative',
+        'reduce_commutative',
+        'fold_early_stop',
+        'into_singleton',
+        'into_stream',
+        'into_keyed',
+        'keys',
+        'values',
+        'entries',
+        'collect_vec',
+        'collect_ready',
+        'all_ticks',
+        'all_ticks_atomic',
+        'join',
+        'cross_product',
+        'cross_singleton',
+        'difference',
+        'anti_join',
+        'chain',
+        'chain_first',
+        'union',
+        'concat',
+        'zip',
+        'defer_tick',
+        'persist',
+        'snapshot',
+        'snapshot_atomic',
+        'sample_every',
+        'sample_eager',
+        'timeout',
+        'batch',
+        'yield_concat',
+        'source_iter',
+        'source_stream',
+        'source_stdin',
+        'for_each',
+        'dest_sink',
+        'assert',
+        'assert_eq',
+        'dest_file',
+        'tee',
+        'clone',
+        'unwrap',
+        'unwrap_or',
+        'filter_if_some',
+        'filter_if_none',
+        'resolve_futures',
+        'resolve_futures_ordered',
+        'tick',
+        'atomic',
+        'complete',
+        'complete_next_tick',
+        'first',
+        'last',
+      ],
+      sinkOperators: ['for_each', 'dest_sink', 'assert', 'assert_eq', 'dest_file'],
+      collectionTypes: ['Stream<', 'Singleton<', 'Optional<', 'KeyedStream<', 'KeyedSingleton<'],
+    };
+  }
+
+  /**
+   * Check if an operator is a networking operator
+   *
+   * Networking operators are essential parts of Hydro distributed dataflow pipelines
+   * that handle communication between different locations (processes, clusters).
+   */
+  private isNetworkingOperator(operatorName: string): boolean {
+    const config = this.getOperatorConfig();
+    return config.networkingOperators.includes(operatorName);
+  }
+
+  /**
+   * Check if an operator is a known dataflow operator based on its name
+   *
+   * This is based on the canonical HydroNode IR definitions and actual operator
+   * implementations in the Hydro codebase. Includes both core dataflow operators
+   * and networking operators that are essential parts of distributed pipelines.
+   */
+  private isKnownDataflowOperator(operatorName: string): boolean {
+    // Check networking operators first
+    if (this.isNetworkingOperator(operatorName)) {
+      return true;
+    }
+
+    // Check core dataflow operators from configuration
+    const config = this.getOperatorConfig();
+    return config.coreDataflowOperators.includes(operatorName);
   }
 
   /**
@@ -1876,17 +2884,11 @@ export class LSPGraphExtractor {
    * - Return unit type ()
    * - Take a live collection as self parameter
    *
-   * This method works with return types from LSP, which should have already
-   * been validated by the LocationAnalyzer using full signature analysis.
+   * This method uses the configuration to identify known sink operators.
    */
-  private isSinkOperator(_operatorName: string): boolean {
-    // In the LSP integration context, we rely on the LocationAnalyzer
-    // to have already done the signature-based filtering. If an operator
-    // with return type () made it this far, it's likely a valid sink operator.
-    //
-    // We could add additional validation here, but the LocationAnalyzer
-    // should have already done the heavy lifting of signature analysis.
-    return true; // Trust the LocationAnalyzer's signature-based filtering
+  private isSinkOperator(operatorName: string): boolean {
+    const config = this.getOperatorConfig();
+    return config.sinkOperators.includes(operatorName);
   }
 
   /**
@@ -1930,6 +2932,78 @@ export class LSPGraphExtractor {
    * @param hierarchyData Hierarchy structure with node assignments
    * @returns Complete Hydroscope JSON object
    */
+  private analyzeNetworkEdges(edges: Edge[], nodes: Node[]): Edge[] {
+    // Create a map for quick node lookup
+    const nodeMap = new Map<string, Node>();
+    for (const node of nodes) {
+      nodeMap.set(node.id, node);
+    }
+
+    let networkEdgeCount = 0;
+
+    const analyzedEdges = edges.map((edge) => {
+      const sourceNode = nodeMap.get(edge.source);
+      const targetNode = nodeMap.get(edge.target);
+
+      if (!sourceNode || !targetNode) {
+        return edge; // Skip if nodes not found
+      }
+
+      const sourceIsNetwork = this.isNetworkingOperator(sourceNode.shortLabel);
+      const targetIsNetwork = this.isNetworkingOperator(targetNode.shortLabel);
+
+      if (sourceIsNetwork || targetIsNetwork) {
+        // This is a network edge
+        networkEdgeCount++;
+        const networkTags = ['network'];
+
+        if (sourceIsNetwork && targetIsNetwork) {
+          // Both sides are network operators (rare case)
+          networkTags.push('network-to-network');
+          this.log(
+            `Network edge: ${sourceNode.shortLabel} -> ${targetNode.shortLabel} (both network ops)`
+          );
+        } else if (sourceIsNetwork) {
+          // Source is network operator (sender side)
+          networkTags.push('network-source', 'remote-sender');
+          this.log(
+            `Network edge: ${sourceNode.shortLabel} -> ${targetNode.shortLabel} (network source)`
+          );
+        } else {
+          // Target is network operator (receiver side)
+          networkTags.push('network-target', 'remote-receiver');
+          this.log(
+            `Network edge: ${sourceNode.shortLabel} -> ${targetNode.shortLabel} (network target)`
+          );
+        }
+
+        return {
+          ...edge,
+          semanticTags: [...edge.semanticTags, ...networkTags],
+        };
+      }
+
+      return edge; // Not a network edge
+    });
+
+    this.log(`Analyzed ${edges.length} edges, found ${networkEdgeCount} network edges`);
+    return analyzedEdges;
+  }
+
+  /**
+   * Analyze and mark network edges, then assemble final Hydroscope JSON object
+   *
+   * A network edge is one where either the source or target node is a networking operator.
+   * We mark the networking operator side as the "remote" side for visualization purposes.
+   *
+   * Requirements addressed:
+   * - 1.4: Generates valid Hydroscope JSON that can be rendered by Hydroscope
+   *
+   * @param nodes Array of extracted nodes
+   * @param edges Array of extracted edges
+   * @param hierarchyData Hierarchy structure with node assignments
+   * @returns Complete Hydroscope JSON object
+   */
   private assembleHydroscopeJson(
     nodes: Node[],
     edges: Edge[],
@@ -1945,14 +3019,17 @@ export class LSPGraphExtractor {
       edges = [];
     }
 
+    // Analyze and mark network edges
+    const analyzedEdges = this.analyzeNetworkEdges(edges, nodes);
+
     // Log assembly statistics
-    this.log(`Assembling Hydroscope JSON: ${nodes.length} nodes, ${edges.length} edges`);
+    this.log(`Assembling Hydroscope JSON: ${nodes.length} nodes, ${analyzedEdges.length} edges`);
 
     // Combine all components into Hydroscope JSON structure
     const json: HydroscopeJson = {
       // Core graph structure
       nodes,
-      edges,
+      edges: analyzedEdges,
 
       // Hierarchy configuration
       hierarchyChoices: hierarchyData.hierarchyChoices,

@@ -32,6 +32,16 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "grammars": [
+      {
+        "language": "rust",
+        "scopeName": "source.rust.hydro",
+        "path": "./syntaxes/hydro-rust.tmLanguage.json",
+        "injectTo": [
+          "source.rust"
+        ]
+      }
+    ],
     "commands": [
       {
         "command": "hydro-ide.visualizeFunction",
@@ -228,7 +238,16 @@
           "maximum": 100000,
           "description": "Maximum file size in lines to analyze"
         },
-
+        "hydroIde.analysis.fallbackToHoverAnalyzer": {
+          "type": "boolean",
+          "default": true,
+          "description": "If no operators are found via GraphExtractor, fall back to hover-based analyzer to colorize locations"
+        },
+        "hydroIde.analysis.useHoverFirst": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use hover-based analysis as primary method (gives concrete types). If false, uses GraphExtractor first (may get generic types)."
+        },
         "hydroIde.performance.cacheSize": {
           "type": "number",
           "default": 50,
@@ -286,6 +305,134 @@
           "type": "boolean",
           "default": false,
           "description": "Show timing information in logs"
+        },
+        "hydroIde.operators.networkingOperators": {
+          "type": "array",
+          "default": [
+            "send_bincode",
+            "recv_bincode",
+            "broadcast_bincode",
+            "demux_bincode",
+            "send_bincode_external",
+            "recv_bincode_external",
+            "send_bytes",
+            "recv_bytes",
+            "broadcast_bytes",
+            "demux_bytes",
+            "send_bytes_external",
+            "recv_bytes_external",
+            "connect",
+            "disconnect"
+          ],
+          "description": "List of networking operators that handle communication between Hydro locations",
+          "items": {
+            "type": "string"
+          }
+        },
+        "hydroIde.operators.coreDataflowOperators": {
+          "type": "array",
+          "default": [
+            "map",
+            "flat_map",
+            "filter",
+            "filter_map",
+            "scan",
+            "enumerate",
+            "inspect",
+            "unique",
+            "sort",
+            "fold",
+            "reduce",
+            "fold_keyed",
+            "reduce_keyed",
+            "reduce_watermark_commutative",
+            "fold_commutative",
+            "reduce_commutative",
+            "fold_early_stop",
+            "into_singleton",
+            "into_stream",
+            "into_keyed",
+            "keys",
+            "values",
+            "entries",
+            "collect_vec",
+            "collect_ready",
+            "all_ticks",
+            "all_ticks_atomic",
+            "join",
+            "cross_product",
+            "cross_singleton",
+            "difference",
+            "anti_join",
+            "chain",
+            "chain_first",
+            "union",
+            "concat",
+            "zip",
+            "defer_tick",
+            "persist",
+            "snapshot",
+            "snapshot_atomic",
+            "sample_every",
+            "sample_eager",
+            "timeout",
+            "batch",
+            "yield_concat",
+            "source_iter",
+            "source_stream",
+            "source_stdin",
+            "for_each",
+            "dest_sink",
+            "assert",
+            "assert_eq",
+            "dest_file",
+            "tee",
+            "clone",
+            "unwrap",
+            "unwrap_or",
+            "filter_if_some",
+            "filter_if_none",
+            "resolve_futures",
+            "resolve_futures_ordered",
+            "tick",
+            "atomic",
+            "complete",
+            "complete_next_tick",
+            "first",
+            "last"
+          ],
+          "description": "List of core dataflow operators for transforming and processing data streams",
+          "items": {
+            "type": "string"
+          }
+        },
+        "hydroIde.operators.sinkOperators": {
+          "type": "array",
+          "default": [
+            "for_each",
+            "dest_sink",
+            "assert",
+            "assert_eq",
+            "dest_file"
+          ],
+          "description": "List of sink operators that consume data streams",
+          "items": {
+            "type": "string"
+          }
+        },
+        "hydroIde.operators.collectionTypes": {
+          "type": "array",
+          "default": [
+            "Stream<",
+            "Singleton<",
+            "Optional<",
+            "KeyedStream<",
+            "KeyedSingleton<"
+          ],
+          "description": "List of valid Hydro collection type prefixes",
+          "items": {
+            "type": "string"
+          }
         }
       }
     }

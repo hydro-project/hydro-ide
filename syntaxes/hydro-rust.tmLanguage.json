@@ -1,0 +1,87 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Hydro Rust Extensions",
+  "scopeName": "source.rust.hydro",
+  "injectionSelector": "L:source.rust",
+  "patterns": [
+    {
+      "include": "#hydro-operators"
+    },
+    {
+      "include": "#hydro-types"
+    },
+    {
+      "include": "#hydro-macros"
+    }
+  ],
+  "repository": {
+    "hydro-operators": {
+      "patterns": [
+        {
+          "name": "support.function.hydro.dataflow",
+          "match": "\\b(map|flat_map|filter|filter_map|scan|enumerate|inspect|unique|sort)(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.hydro.aggregation", 
+          "match": "\\b(fold|reduce|fold_keyed|reduce_keyed|reduce_watermark_commutative|fold_commutative|reduce_commutative|fold_early_stop)(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.hydro.conversion",
+          "match": "\\b(into_singleton|into_stream|into_keyed|keys|values|entries|collect_vec|collect_ready)(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.hydro.timing",
+          "match": "\\b(all_ticks|all_ticks_atomic|defer_tick|persist|snapshot|snapshot_atomic|sample_every|sample_eager|timeout|batch|yield_concat)(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.hydro.join",
+          "match": "\\b(join|cross_product|cross_singleton|difference|anti_join|chain|chain_first|union|concat|zip)(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.hydro.source",
+          "match": "\\b(source_iter|source_stream|source_stdin)(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.hydro.sink",
+          "match": "\\b(for_each|dest_sink|assert|assert_eq|dest_file)(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.hydro.network",
+          "match": "\\b(send_bincode|recv_bincode|broadcast_bincode|demux_bincode|send_bincode_external|recv_bincode_external|send_bytes|recv_bytes|broadcast_bytes|demux_bytes|send_bytes_external|recv_bytes_external|round_robin_bincode)(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.hydro.utility",
+          "match": "\\b(tee|clone|unwrap|unwrap_or|filter_if_some|filter_if_none|resolve_futures|resolve_futures_ordered)(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.hydro.control",
+          "match": "\\b(tick|atomic|complete|complete_next_tick|first|last|assume_ordering)(?=\\s*\\()"
+        }
+      ]
+    },
+    "hydro-types": {
+      "patterns": [
+        {
+          "name": "support.type.hydro.collection",
+          "match": "\\b(Stream|Singleton|Optional|KeyedStream|KeyedSingleton)\\b"
+        },
+        {
+          "name": "support.type.hydro.location", 
+          "match": "\\b(Process|Cluster|Tick|Atomic|External)\\b"
+        },
+        {
+          "name": "support.type.hydro.flow",
+          "match": "\\b(FlowBuilder|Flow)\\b"
+        }
+      ]
+    },
+    "hydro-macros": {
+      "patterns": [
+        {
+          "name": "support.function.macro.hydro",
+          "match": "\\b(q!|nondet!)\\b"
+        }
+      ]
+    }
+  }
+}

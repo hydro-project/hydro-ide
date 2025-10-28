@@ -1,6 +1,6 @@
 /**
  * Tree-sitter based Rust parser for operator chain extraction
- * 
+ *
  * Uses tree-sitter to properly parse Rust syntax and extract operator chains,
  * replacing the regex-based approach with proper AST parsing.
  */
@@ -88,7 +88,7 @@ export class TreeSitterRustParser {
 
   /**
    * Parse document and extract all variable bindings with their operator chains
-   * 
+   *
    * @param document The document to parse
    * @returns Array of variable bindings
    */
@@ -103,10 +103,10 @@ export class TreeSitterRustParser {
     this.walkTree(tree.rootNode, (node) => {
       // Look for let_declaration nodes
       if (node.type === 'let_declaration') {
-        const binding = this.extractVariableBinding(node, document);
-        if (binding) {
-          bindings.push(binding);
-          this.log(`Found binding: ${binding.varName} with ${binding.operators.length} operators`);
+        const newBindings = this.extractVariableBindingsFromLet(node, document);
+        for (const b of newBindings) {
+          bindings.push(b);
+          this.log(`Found binding: ${b.varName} with ${b.operators.length} operators`);
         }
       }
     });
@@ -117,7 +117,7 @@ export class TreeSitterRustParser {
 
   /**
    * Parse document and extract standalone operator chains (not assigned to variables)
-   * 
+   *
    * @param document The document to parse
    * @returns Array of standalone operator chains
    */
@@ -133,15 +133,18 @@ export class TreeSitterRustParser {
       // Look for expression_statement nodes that contain method chains
       if (node.type === 'expression_statement') {
         // Check if this expression statement contains a method chain
-        const chainNode = node.children.find((child: SyntaxNode) => 
-          child.type === 'call_expression' || child.type === 'field_expression'
+        const chainNode = node.children.find(
+          (child: SyntaxNode) =>
+            child.type === 'call_expression' || child.type === 'field_expression'
         );
-        
+
         if (chainNode) {
           const operators = this.extractOperatorChain(chainNode);
           if (operators.length > 0) {
             chains.push(operators);
-            this.log(`Found standalone chain with ${operators.length} operators: [${operators.map(op => op.name).join(', ')}]`);
+            this.log(
+              `Found standalone chain with ${operators.length} operators: [${operators.map((op) => op.name).join(', ')}]`
+            );
           }
         }
       }
@@ -153,10 +156,10 @@ export class TreeSitterRustParser {
 
   /**
    * Extract operator chain from a specific line
-   * 
+   *
    * Finds the let_declaration that starts on the given line and extracts
    * only the operators from that specific declaration.
-   * 
+   *
    * @param document The document
    * @param startLine The line to start from (0-indexed)
    * @returns Array of operators in the chain
@@ -182,66 +185,105 @@ export class TreeSitterRustParser {
   /**
    * Extract variable binding from a let_declaration node
    */
-  private extractVariableBinding(letNode: SyntaxNode, document: vscode.TextDocument): VariableBindingNode | null {
-    // let_declaration structure:
-    // (let_declaration
-    //   pattern: (identifier) @var_name
-    //   value: (call_expression | field_expression | ...) @value
-    // )
 
-    let varName: string | null = null;
+  private extractVariableBindingsFromLet(
+    letNode: SyntaxNode,
+    document: vscode.TextDocument
+  ): VariableBindingNode[] {
+    // let_declaration structure varies:
+    // - Simple: let identifier = value;
+    // - Destructuring: let (a, b) = value; let (a, _b) = value; let (a, (b, c)) = value;
+    // We collect all identifiers in the pattern and associate them with the same operator chain from value.
+
+    const patternIdentifiers: string[] = [];
     let valueNode: SyntaxNode | null = null;
 
-    // Find the pattern (variable name) and value
-    // Structure: let identifier = call_expression ;
+    // First pass: detect value node and pattern subtree
     for (let i = 0; i < letNode.childCount; i++) {
       const child = letNode.child(i);
       if (!child) continue;
-      
-      // Look for the identifier (variable name)
-      if (child.type === 'identifier') {
-        varName = document.getText(new vscode.Range(
-          new vscode.Position(child.startPosition.row, child.startPosition.column),
-          new vscode.Position(child.endPosition.row, child.endPosition.column)
-        ));
-      }
-      
-      // Look for the value expression (call_expression for method chains)
-      if (child.type === 'call_expression') {
+
+      // Value expression can be call_expression or field_expression (start of chain)
+      if (!valueNode && (child.type === 'call_expression' || child.type === 'field_expression')) {
         valueNode = child;
       }
     }
 
-    if (!varName || !valueNode) {
-      return null;
+    // Second pass: collect identifiers from the pattern (any identifier under letNode before '=')
+    // In tree-sitter, pattern forms are children before the '=' token; we'll conservatively collect
+    // identifiers from children that are patterns or from direct 'identifier' children.
+    const collectFromNode = (node: SyntaxNode) => {
+      if (node.type === 'identifier') {
+        const name = document.getText(
+          new vscode.Range(
+            new vscode.Position(node.startPosition.row, node.startPosition.column),
+            new vscode.Position(node.endPosition.row, node.endPosition.column)
+          )
+        );
+        if (name) patternIdentifiers.push(name);
+        return;
+      }
+      // Recurse into common pattern node types
+      const PATTERN_TYPES = new Set([
+        'tuple_pattern',
+        'parenthesized_pattern',
+        'slice_pattern',
+        'reference_pattern',
+        'or_pattern',
+        'mutable_specifier',
+        'tuple_struct_pattern',
+        'struct_pattern',
+        'field_pattern',
+        'box_pattern',
+      ]);
+      if (PATTERN_TYPES.has(node.type)) {
+        for (const ch of node.children) collectFromNode(ch);
+      }
+    };
+
+    // Heuristic: examine children until we hit '=' or the value node; collect identifiers in that region
+    for (let i = 0; i < letNode.childCount; i++) {
+      const child = letNode.child(i);
+      if (!child) continue;
+      if (child === valueNode) break;
+      // '=' may be represented as punctuation node with text '='; skip once we reach it
+      if (child.type === '=') break;
+      if (child.type === 'identifier') {
+        collectFromNode(child);
+      } else {
+        collectFromNode(child);
+      }
     }
 
-    // Extract operator chain from the value expression
+    if (!valueNode) {
+      return [];
+    }
+
+    // Extract operator chain from the value expression or its main chain
     const operators = this.extractOperatorChain(valueNode);
-
-    // Include all operator chains, even single operators
-    // The LSP graph extractor will validate which ones are actual Hydro operators
-    // based on their return types
     if (operators.length === 0) {
-      return null;
+      return [];
     }
 
-    return {
+    // If no identifiers were found (unlikely), fallback to a single synthetic binding name
+    const varNames = patternIdentifiers.length > 0 ? patternIdentifiers : ['_'];
+
+    return varNames.map((varName) => ({
       varName,
       line: letNode.startPosition.row,
       operators,
-    };
+    }));
   }
 
   /**
    * Extract operator chain from an expression node
-   * 
+   *
    * Handles:
    * - field_expression: a.b.c
    * - call_expression: a.b().c()
    * - let_declaration: let x = a.b().c()
    * - Nested chains
-   * 
+   *
    * Only extracts operators from the main method chain, not from arguments.
    */
   private extractOperatorChain(node: SyntaxNode): OperatorNode[] {
@@ -282,10 +324,12 @@ export class TreeSitterRustParser {
       }
     } else if (node.type === 'field_expression') {
       // This is a method call in the main chain
-      const fieldIdentifier = node.children.find((child: SyntaxNode) => child.type === 'field_identifier');
+      const fieldIdentifier = node.children.find(
+        (child: SyntaxNode) => child.type === 'field_identifier'
+      );
       if (fieldIdentifier) {
         const operatorName = fieldIdentifier.text;
-        
+
         operators.push({
           name: operatorName,
           line: fieldIdentifier.startPosition.row,
@@ -296,8 +340,8 @@ export class TreeSitterRustParser {
       }
 
       // Continue with the receiver (left side of the dot)
-      const receiver = node.children.find((child: SyntaxNode) => 
-        child.type !== 'field_identifier' && child.type !== '.'
+      const receiver = node.children.find(
+        (child: SyntaxNode) => child.type !== 'field_identifier' && child.type !== '.'
       );
       if (receiver) {
         this.extractFromMainChain(receiver, operators);
@@ -306,17 +350,66 @@ export class TreeSitterRustParser {
     // For other node types (like identifier), stop recursion to avoid picking up arguments
   }
 
-
-
   /**
    * Walk the syntax tree and call visitor for each node
    */
   private walkTree(node: SyntaxNode, visitor: (node: SyntaxNode) => void): void {
     visitor(node);
-    
+
     for (const child of node.children) {
       this.walkTree(child, visitor);
     }
   }
 
+  /**
+   * Find the enclosing Rust function name for a given line in the document.
+   * Returns the nearest function_item that spans the line (innermost by span).
+   */
+  public findEnclosingFunctionName(document: vscode.TextDocument, line: number): string | null {
+    try {
+      const sourceCode = document.getText();
+      const tree = this.parser.parse(sourceCode);
+
+      let bestFn: SyntaxNode | null = null;
+      let bestSpan: number = Number.POSITIVE_INFINITY;
+
+      this.walkTree(tree.rootNode, (node) => {
+        if (node.type === 'function_item') {
+          const start = node.startPosition.row;
+          const end = node.endPosition.row;
+          if (start <= line && line <= end) {
+            const span = end - start;
+            if (span < bestSpan) {
+              bestSpan = span;
+              bestFn = node;
+            }
+          }
+        }
+      });
+
+      if (!bestFn) return null;
+
+      // Extract the identifier for the function name
+      const identifier = this.findChildOfType(bestFn, 'identifier');
+      if (!identifier) return null;
+      const name = document.getText(
+        new vscode.Range(
+          new vscode.Position(identifier.startPosition.row, identifier.startPosition.column),
+          new vscode.Position(identifier.endPosition.row, identifier.endPosition.column)
+        )
+      );
+      return name || null;
+    } catch (e) {
+      // Fall back silently
+      return null;
+    }
+  }
+
+  /** Find first descendant (direct child) of the given type */
+  private findChildOfType(node: SyntaxNode, type: string): SyntaxNode | null {
+    for (const child of node.children) {
+      if (child.type === type) return child;
+    }
+    return null;
+  }
 }

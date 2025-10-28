@@ -1,11 +1,16 @@
 /**
- * Graph Extractor - Coordination layer
- * 
- * Coordinates between TreeSitterAnalyzer and LSPAnalyzer to build graphs:
- * - Matches operators from both sources
- * - Filters to valid dataflow operators
- * - Builds final graph structure
- * - Handles coordinate reconciliation
+ * Graph Extractor - Tree-sitter + LSP type definition coordination
+ *
+ * Used by the legacy GraphExtractor-first analysis strategy. Coordinates between:
+ * - TreeSitterAnalyzer: finds operator positions via syntax analysis
+ * - LSPAnalyzer type definitions: provides type information (may return generics)
+ *
+ * Note: The modern hover-first strategy bypasses most of this logic, using
+ * tree-sitter for positioning and LSP hover for concrete types instead.
+ *
+ * This class still serves two purposes:
+ * 1. Provides operator positions for the hover-first strategy
+ * 2. Implements the legacy GraphExtractor-first strategy (if configured)
  */
 
 import * as vscode from 'vscode';
@@ -59,7 +64,14 @@ export class GraphExtractor {
   }
 
   /**
-   * Extract graph information using tree-sitter first, then LSP for type filtering
+   * Extract graph information using tree-sitter for positioning and LSP type definitions
+   *
+   * Used by both analysis strategies:
+   * - Hover-first: Returns operator positions for hover queries to process
+   * - GraphExtractor-first: Returns typed operators based on LSP type definitions
+   *
+   * The hover-first strategy primarily uses the unmatchedTreeSitterOperators result
+   * to get all operator positions, then queries hover for concrete types.
    */
   public async extractGraph(
     document: vscode.TextDocument,
@@ -74,12 +86,16 @@ export class GraphExtractor {
     // Step 2: For each operator, query LSP for type information and filter by location types
     const matchedOperators: MatchedOperator[] = [];
     const rejectedOperators: OperatorCall[] = [];
-    
+
     for (const operatorCall of treeSitterResult.allOperatorCalls) {
       // Query LSP for type information at this specific operator position
       const position = new vscode.Position(operatorCall.line, operatorCall.column);
-      const typeInfo = await this.lspAnalyzer.getTypeAtPosition(document, position, operatorCall.isMethodCall);
-      
+      const typeInfo = await this.lspAnalyzer.getTypeAtPosition(
+        document,
+        position,
+        operatorCall.isMethodCall
+      );
+
       if (!typeInfo) {
         rejectedOperators.push(operatorCall);
         continue;
@@ -87,18 +103,29 @@ export class GraphExtractor {
 
       // Parse location type from the type information
       const locationKind = this.lspAnalyzer.parseLocationType(typeInfo);
-      const isSink = await this.lspAnalyzer.isSinkOperator(document, position, operatorCall.name, typeInfo, 5000);
-      
+      const isSink = await this.lspAnalyzer.isSinkOperator(
+        document,
+        position,
+        operatorCall.name,
+        typeInfo,
+        5000
+      );
+
       // Check if this is a valid Hydro operator
       if (locationKind || isSink) {
         const isValidOperator = this.isValidDataflowOperator(operatorCall.name, typeInfo);
-        
+
         if (isValidOperator) {
           // Create LocationInfo from the operator and type information
           const locationInfo: LocationInfo = {
             locationType: typeInfo,
             locationKind: locationKind || 'Process<Leader>', // Default for sink operators
-            range: new vscode.Range(operatorCall.line, operatorCall.column, operatorCall.line, operatorCall.column + operatorCall.name.length),
+            range: new vscode.Range(
+              operatorCall.line,
+              operatorCall.column,
+              operatorCall.line,
+              operatorCall.column + operatorCall.name.length
+            ),
             operatorName: operatorCall.name,
             fullReturnType: typeInfo,
           };
@@ -108,7 +135,9 @@ export class GraphExtractor {
             locationInfo,
           });
         } else {
-          this.log(`Filtered out ${operatorCall.name} - not a dataflow operator (return type: ${typeInfo})`);
+          this.log(
+            `Filtered out ${operatorCall.name} - not a dataflow operator (return type: ${typeInfo})`
+          );
           rejectedOperators.push(operatorCall);
         }
       } else {
@@ -125,10 +154,6 @@ export class GraphExtractor {
       unmatchedLSPIdentifiers: [], // No unmatched LSP identifiers in this approach
     };
   }
-
-
-
-
 
   /**
    * Check if an operator is a valid dataflow operator based on its return type

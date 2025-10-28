@@ -43,17 +43,13 @@ export type ExtensionToWebviewMessage =
         showLocationGroups?: boolean;
         useShortLabels?: boolean;
       };
-    }
-  | { type: 'exportPng' }
-  | { type: 'exportJson' };
+    };
 
 /**
  * Message types sent from webview to extension
  */
 export type WebviewToExtensionMessage =
   | { type: 'viewStateChanged'; viewState: ViewState }
-  | { type: 'exportPngData'; dataUrl: string }
-  | { type: 'exportJsonData'; jsonData: string }
   | { type: 'error'; message: string; details?: string }
   | { type: 'ready' }
   | { type: 'nodeSelected'; nodeId: string; metadata: unknown };
@@ -175,46 +171,6 @@ export class WebviewManager {
     }
 
     this.outputChannel.appendLine('[WebviewManager] Visualization refreshed');
-  }
-
-  /**
-   * Export current visualization as JSON
-   * Requests JSON data from webview
-   */
-  async exportJson(): Promise<void> {
-    if (!this.panel || !this.currentState) {
-      throw new Error('No active visualization to export');
-    }
-
-    this.outputChannel.appendLine('[WebviewManager] Requesting JSON export from webview');
-
-    // Request JSON export from webview
-    await this.postMessage({
-      type: 'exportJson',
-    });
-
-    // The webview will respond with a 'exportJsonData' message containing the JSON
-    // This is handled in handleWebviewMessage
-  }
-
-  /**
-   * Export current visualization as PNG
-   * Requests PNG data from webview
-   */
-  async exportPng(): Promise<void> {
-    if (!this.panel || !this.currentState) {
-      throw new Error('No active visualization to export');
-    }
-
-    this.outputChannel.appendLine('[WebviewManager] Requesting PNG export from webview');
-
-    // Request PNG export from webview
-    await this.postMessage({
-      type: 'exportPng',
-    });
-
-    // The webview will respond with a 'exportPngData' message containing the data URL
-    // This is handled in handleWebviewMessage
   }
 
   /**
@@ -370,16 +326,6 @@ export class WebviewManager {
         }
         break;
 
-      case 'exportPngData':
-        this.outputChannel.appendLine('[WebviewManager] Received PNG data from webview');
-        await this.handlePngExport(message.dataUrl);
-        break;
-
-      case 'exportJsonData':
-        this.outputChannel.appendLine('[WebviewManager] Received JSON data from webview');
-        await this.handleJsonExport(message.jsonData);
-        break;
-
       case 'nodeSelected':
         this.outputChannel.appendLine(`[WebviewManager] Node selected: ${message.nodeId}`);
         // Could be used for future features like code navigation
@@ -395,79 +341,6 @@ export class WebviewManager {
 
       default:
         this.outputChannel.appendLine(`[WebviewManager] Unknown message type: ${(message as { type?: string }).type}`);
-    }
-  }
-
-  /**
-   * Handle JSON export data from webview
-   */
-  private async handleJsonExport(jsonData: string): Promise<void> {
-    // Prompt user for save location
-    const uri = await vscode.window.showSaveDialog({
-      defaultUri: vscode.Uri.file('hydro-graph.json'),
-      filters: {
-        'JSON Files': ['json'],
-        'All Files': ['*'],
-      },
-    });
-
-    if (!uri) {
-      this.outputChannel.appendLine('[WebviewManager] JSON export cancelled by user');
-      return;
-    }
-
-    try {
-      // Write JSON to file
-      await vscode.workspace.fs.writeFile(uri, Buffer.from(jsonData, 'utf8'));
-      
-      vscode.window.showInformationMessage(`Graph exported to ${uri.fsPath}`);
-      this.outputChannel.appendLine(`[WebviewManager] JSON exported to ${uri.fsPath}`);
-    } catch (error) {
-      const errorMsg = `Failed to export JSON: ${error}`;
-      vscode.window.showErrorMessage(errorMsg);
-      this.outputChannel.appendLine(`[WebviewManager] ${errorMsg}`);
-      throw error;
-    }
-  }
-
-  /**
-   * Handle PNG export data from webview
-   */
-  private async handlePngExport(dataUrl: string): Promise<void> {
-    // Prompt user for save location
-    const uri = await vscode.window.showSaveDialog({
-      defaultUri: vscode.Uri.file('hydro-graph.png'),
-      filters: {
-        'PNG Images': ['png'],
-        'All Files': ['*'],
-      },
-    });
-
-    if (!uri) {
-      this.outputChannel.appendLine('[WebviewManager] PNG export cancelled by user');
-      return;
-    }
-
-    try {
-      // Convert data URL to buffer
-      // Data URL format: data:image/png;base64,<base64-data>
-      const base64Data = dataUrl.split(',')[1];
-      if (!base64Data) {
-        throw new Error('Invalid data URL format');
-      }
-
-      const buffer = Buffer.from(base64Data, 'base64');
-      
-      // Write to file
-      await vscode.workspace.fs.writeFile(uri, buffer);
-      
-      vscode.window.showInformationMessage(`Graph exported to ${uri.fsPath}`);
-      this.outputChannel.appendLine(`[WebviewManager] PNG exported to ${uri.fsPath}`);
-    } catch (error) {
-      const errorMsg = `Failed to export PNG: ${error}`;
-      vscode.window.showErrorMessage(errorMsg);
-      this.outputChannel.appendLine(`[WebviewManager] ${errorMsg}`);
-      throw error;
     }
   }
 

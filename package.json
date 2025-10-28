@@ -46,62 +46,52 @@
     "commands": [
       {
         "command": "hydro-ide.visualizeFunction",
-        "title": "Hydro: Visualize Function",
+        "title": "Hydro: Visualize Function (Quick)",
         "category": "Hydro"
       },
       {
         "command": "hydro-ide.visualizeFile",
-        "title": "Hydro: Visualize File",
+        "title": "Hydro: Visualize File (Quick)",
         "category": "Hydro"
       },
       {
         "command": "hydro-ide.visualizeWorkspace",
-        "title": "Hydro: Visualize Workspace",
+        "title": "Hydro: Visualize Workspace (Quick)",
         "category": "Hydro"
       },
       {
         "command": "hydro-ide.visualizeFunctionLSP",
-        "title": "Hydro: Visualize Function (LSP - Fast)",
+        "title": "Hydro: Visualize Function (Quick - LSP)",
         "category": "Hydro"
       },
       {
         "command": "hydro-ide.visualizeFileLSP",
-        "title": "Hydro: Visualize File (LSP - Fast)",
+        "title": "Hydro: Visualize File (Quick - LSP)",
         "category": "Hydro"
       },
       {
         "command": "hydro-ide.visualizeWorkspaceLSP",
-        "title": "Hydro: Visualize Workspace (LSP - Fast)",
+        "title": "Hydro: Visualize Workspace (Quick - LSP)",
         "category": "Hydro"
       },
       {
         "command": "hydro-ide.visualizeFunctionCargo",
-        "title": "Hydro: Visualize Function (Cargo - Complete)",
+        "title": "Hydro: Visualize Function (Full - Cargo)",
         "category": "Hydro"
       },
       {
         "command": "hydro-ide.visualizeFileCargo",
-        "title": "Hydro: Visualize File (Cargo - Complete)",
+        "title": "Hydro: Visualize File (Full - Cargo)",
         "category": "Hydro"
       },
       {
         "command": "hydro-ide.visualizeWorkspaceCargo",
-        "title": "Hydro: Visualize Workspace (Cargo - Complete)",
+        "title": "Hydro: Visualize Workspace (Full - Cargo)",
         "category": "Hydro"
       },
       {
         "command": "hydro-ide.refresh",
         "title": "Hydro: Refresh Visualization",
-        "category": "Hydro"
-      },
-      {
-        "command": "hydro-ide.exportJson",
-        "title": "Hydro: Export as JSON",
-        "category": "Hydro"
-      },
-      {
-        "command": "hydro-ide.exportPng",
-        "title": "Hydro: Export as PNG",
         "category": "Hydro"
       },
       {
@@ -112,21 +102,6 @@
       {
         "command": "hydro-ide.clearColorizations",
         "title": "Hydro: Clear Location Colorizations",
-        "category": "Hydro"
-      },
-      {
-        "command": "hydro-ide.clearTypeCache",
-        "title": "Hydro: Clear Type Cache",
-        "category": "Hydro"
-      },
-      {
-        "command": "hydro-ide.showCacheStats",
-        "title": "Hydro: Show Cache Statistics",
-        "category": "Hydro"
-      },
-      {
-        "command": "hydro-ide.clearCache",
-        "title": "Hydro: Clear Analysis Cache",
         "category": "Hydro"
       }
     ],

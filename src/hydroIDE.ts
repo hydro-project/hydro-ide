@@ -452,42 +452,6 @@ export class HydroIDE {
   }
 
   /**
-   * Export current visualization as JSON
-   */
-  async exportJson(): Promise<void> {
-    this.logger.info('Export JSON requested');
-    
-    if (!this.webviewManager.hasActiveVisualization()) {
-      this.errorHandler.showInfo('No active visualization to export');
-      return;
-    }
-
-    try {
-      await this.webviewManager.exportJson();
-    } catch (error) {
-      await this.errorHandler.handleError(error, 'exportJson');
-    }
-  }
-
-  /**
-   * Export current visualization as PNG
-   */
-  async exportPng(): Promise<void> {
-    this.logger.info('Export PNG requested');
-    
-    if (!this.webviewManager.hasActiveVisualization()) {
-      this.errorHandler.showInfo('No active visualization to export');
-      return;
-    }
-
-    try {
-      await this.webviewManager.exportPng();
-    } catch (error) {
-      await this.errorHandler.handleError(error, 'exportPng');
-    }
-  }
-
-  /**
    * Handle file change events for auto-refresh
    * Called when a Rust file is saved
    */

@@ -237,20 +237,6 @@ function registerUtilityCommands(context: vscode.ExtensionContext) {
       await hydroIDE.refresh();
     })
   );
-
-  // Export visualization as JSON
-  context.subscriptions.push(
-    vscode.commands.registerCommand('hydro-ide.exportJson', async () => {
-      await hydroIDE.exportJson();
-    })
-  );
-
-  // Export visualization as PNG
-  context.subscriptions.push(
-    vscode.commands.registerCommand('hydro-ide.exportPng', async () => {
-      await hydroIDE.exportPng();
-    })
-  );
 }
 
 /**
@@ -505,74 +491,6 @@ function registerLocationColorizationCommands(context: vscode.ExtensionContext) 
         locationColorizer.clearColorizations(editor);
         vscode.window.showInformationMessage('Location colorizations cleared.');
       }
-    })
-  );
-
-  // Clear type cache command
-  context.subscriptions.push(
-    vscode.commands.registerCommand('hydro-ide.clearTypeCache', () => {
-      locationColorizer.clearCache();
-      vscode.window.showInformationMessage('Type cache cleared. Re-colorize to rebuild cache.');
-    })
-  );
-
-  // Show cache statistics command
-  context.subscriptions.push(
-    vscode.commands.registerCommand('hydro-ide.showCacheStats', () => {
-      const stats = locationAnalyzer.getCacheStats();
-      
-      // Format statistics for display
-      const message = [
-        'Location Analyzer Cache Statistics:',
-        '',
-        `Total Files Cached: ${stats.numFiles}`,
-        `Cache Hits: ${stats.hits}`,
-        `Cache Misses: ${stats.misses}`,
-        `Hit Rate: ${stats.hitRatePercent}%`,
-        '',
-        `Cache Size Limit: ${vscode.workspace.getConfiguration('hydroIde').get<number>('performance.cacheSize', 50)} entries`
-      ].join('\n');
-      
-      // Display in output channel
-      outputChannel.appendLine('');
-      outputChannel.appendLine('='.repeat(60));
-      outputChannel.appendLine(message);
-      outputChannel.appendLine('='.repeat(60));
-      outputChannel.show();
-      
-      // Also show a brief notification
-      vscode.window.showInformationMessage(
-        `Cache: ${stats.numFiles} files, ${stats.hitRatePercent}% hit rate`
-      );
-    })
-  );
-
-  // Clear analysis cache command
-  context.subscriptions.push(
-    vscode.commands.registerCommand('hydro-ide.clearCache', () => {
-      // Clear the location analyzer cache
-      locationAnalyzer.clearCache();
-      
-      // Clear decorations in the active editor
-      const editor = vscode.window.activeTextEditor;
-      if (editor) {
-        locationColorizer.clearColorizations(editor);
-      }
-      
-      // Trigger re-analysis if a Rust file is open
-      if (editor && editor.document.languageId === 'rust') {
-        const config = vscode.workspace.getConfiguration('hydroIde');
-        const coloringEnabled = config.get<boolean>('locationColoring.enabled', true);
-        
-        if (coloringEnabled) {
-          // Re-colorize after a short delay to allow cache to clear
-          setTimeout(() => {
-            locationColorizer.colorizeFile(editor);
-          }, 100);
-        }
-      }
-      
-      vscode.window.showInformationMessage('Analysis cache cleared and re-analyzing...');
     })
   );
 

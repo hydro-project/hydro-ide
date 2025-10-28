@@ -126,24 +126,6 @@ suite('WebviewManager - Graph Data Communication', () => {
     );
   });
 
-  test('should throw error when exporting without active visualization', async () => {
-    manager = new WebviewManager(context, outputChannel);
-    
-    await assert.rejects(
-      async () => {
-        await manager!.exportJson();
-      },
-      /No active visualization to export/
-    );
-    
-    await assert.rejects(
-      async () => {
-        await manager!.exportPng();
-      },
-      /No active visualization to export/
-    );
-  });
-
   test('should validate JSON during refresh', async () => {
     manager = new WebviewManager(context, outputChannel);
     

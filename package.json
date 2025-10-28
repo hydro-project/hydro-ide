@@ -113,19 +113,29 @@
           "group": "hydro@1"
         },
         {
-          "command": "hydro-ide.visualizeFile",
+          "command": "hydro-ide.visualizeFunctionCargo",
           "when": "editorLangId == rust",
           "group": "hydro@2"
         },
         {
-          "command": "hydro-ide.colorizeLocations",
+          "command": "hydro-ide.visualizeFile",
           "when": "editorLangId == rust",
           "group": "hydro@3"
         },
         {
-          "command": "hydro-ide.clearColorizations",
+          "command": "hydro-ide.visualizeFileCargo",
           "when": "editorLangId == rust",
           "group": "hydro@4"
+        },
+        {
+          "command": "hydro-ide.colorizeLocations",
+          "when": "editorLangId == rust",
+          "group": "hydro@5"
+        },
+        {
+          "command": "hydro-ide.clearColorizations",
+          "when": "editorLangId == rust",
+          "group": "hydro@6"
         }
       ]
     },

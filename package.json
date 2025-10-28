@@ -5,6 +5,7 @@
   "version": "0.1.0",
   "publisher": "hydro-project",
   "license": "Apache-2.0",
+  "icon": "icon.png",
   "galleryBanner": {
     "color": "#2563eb",
     "theme": "dark"
@@ -490,8 +491,8 @@
     "webpack-cli": "^5.1.0"
   },
   "dependencies": {
+    "@hydro-project/hydroscope": "^1.2.0",
     "html2canvas": "^1.4.1",
-    "hydroscope": "file:../hydroscope",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "tree-sitter": "^0.22.4",

@@ -322,6 +322,15 @@ export class TreeSitterRustParser {
       if (method) {
         this.extractFromMainChain(method, operators);
       }
+      
+      // Also check if the receiver is another call_expression (chained method calls)
+      // This handles cases like: parsed_requests.clone().filter_map(...)
+      const receiver = node.children.find((child: SyntaxNode) => 
+        child.type === 'call_expression' || child.type === 'field_expression'
+      );
+      if (receiver && receiver !== method) {
+        this.extractFromMainChain(receiver, operators);
+      }
     } else if (node.type === 'field_expression') {
       // This is a method call in the main chain
       const fieldIdentifier = node.children.find(

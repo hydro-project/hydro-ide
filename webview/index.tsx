@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Hydroscope, type HydroscopeData, type RenderConfig } from 'hydroscope';
-import 'hydroscope/style.css';
+import { Hydroscope, type HydroscopeData, type RenderConfig } from '@hydro-project/hydroscope';
+import '@hydro-project/hydroscope/style.css';
 import './styles.css';
 
 // VSCode API available in webview context

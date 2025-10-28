@@ -1,18 +1,18 @@
 /**
  * HydroIDE - Main orchestration class for Hydro IDE plugin
- * 
+ *
  * This class coordinates all IDE features for Hydro development:
  * - Visualization: Dataflow graph visualization powered by Hydroscope
  * - ScopeAnalyzer: Detects Hydro code at different scopes
  * - CargoOrchestrator: Builds code and extracts metadata
  * - WebviewManager: Displays visualizations and other UI
  * - ErrorHandler: Handles errors and user feedback
- * 
+ *
  * Current Features:
  * - Dataflow visualization at function/file/workspace scope
  * - Auto-refresh on file changes
  * - Export capabilities (JSON and PNG)
- * 
+ *
  * Future Features:
  * - Code completion and IntelliSense
  * - Debugging support
@@ -46,32 +46,28 @@ export class HydroIDE {
   private readonly progressReporter: ProgressReporter;
   private readonly graphValidator: GraphValidator;
   private readonly lspGraphExtractor: LSPGraphExtractor;
-  
+
   // Track current visualization state for refresh
   private currentScopeType?: ScopeType;
   private currentEditor?: vscode.TextEditor;
-  
+
   // File watcher for auto-refresh
   private fileWatcherDisposable?: vscode.Disposable;
 
-  constructor(
-    context: vscode.ExtensionContext,
-    outputChannel: vscode.OutputChannel
-  ) {
-    
+  constructor(context: vscode.ExtensionContext, outputChannel: vscode.OutputChannel) {
     // Initialize logger
     this.logger = new Logger(outputChannel, 'HydroIDE');
     this.logger.info('Initializing HydroIDE');
-    
+
     // Initialize configuration manager
     this.configManager = new ConfigManager();
-    
+
     // Initialize error handler
     this.errorHandler = new ErrorHandler(outputChannel, context);
-    
+
     // Initialize progress reporter
     this.progressReporter = new ProgressReporter(this.logger);
-    
+
     // Initialize graph validator
     const perfConfig = this.configManager.getPerformanceConfig();
     this.graphValidator = new GraphValidator(
@@ -79,13 +75,13 @@ export class HydroIDE {
       perfConfig.largeGraphThreshold,
       perfConfig.warnOnLargeGraphs
     );
-    
+
     // Initialize component managers
     this.scopeAnalyzer = new ScopeAnalyzer(outputChannel);
     this.cargoOrchestrator = new CargoOrchestrator(outputChannel);
     this.webviewManager = new WebviewManager(context, outputChannel);
     this.lspGraphExtractor = new LSPGraphExtractor(outputChannel);
-    
+
     this.logger.info('HydroIDE initialized successfully');
   }
 
@@ -95,7 +91,7 @@ export class HydroIDE {
    */
   async visualizeScopeLSP(scopeType: ScopeType): Promise<void> {
     this.logger.section(`Visualize ${scopeType} scope (LSP)`);
-    
+
     // Get active editor
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
@@ -118,7 +114,10 @@ export class HydroIDE {
     this.logger.keyValue('File', editor.document.fileName);
     if (scopeType === 'function') {
       const position = editor.selection.active;
-      this.logger.keyValue('Cursor position', `line ${position.line + 1}, column ${position.character + 1}`);
+      this.logger.keyValue(
+        'Cursor position',
+        `line ${position.line + 1}, column ${position.character + 1}`
+      );
     }
 
     try {
@@ -126,21 +125,18 @@ export class HydroIDE {
       this.logger.info('Analyzing scope...');
       const scopeTarget = await this.scopeAnalyzer.analyzeScope(editor, scopeType);
       this.logger.info(`Found ${scopeTarget.functions.length} function(s)`);
-      
+
       // Extract graph using LSP
       this.logger.info('Extracting graph via LSP...');
-      const graphJson = await this.lspGraphExtractor.extractGraph(
-        editor.document,
-        scopeTarget
-      );
-      
+      const graphJson = await this.lspGraphExtractor.extractGraph(editor.document, scopeTarget);
+
       // Validate graph
       const validation = this.graphValidator.validate(JSON.stringify(graphJson));
-      
+
       if (!validation.valid) {
         throw new Error(`Invalid graph JSON: ${validation.errors.join(', ')}`);
       }
-      
+
       // Check for large graphs
       if (validation.stats && validation.stats.isLarge) {
         const proceed = await this.graphValidator.checkLargeGraph(validation.stats);
@@ -149,19 +145,19 @@ export class HydroIDE {
           return;
         }
       }
-      
+
       // Display visualization
       this.logger.info('Displaying visualization...');
       await this.displayVisualization(scopeTarget, JSON.stringify(graphJson));
-      
+
       // Store current state for refresh
       this.currentScopeType = scopeType;
       this.currentEditor = editor;
-      
+
       // Show success message
       const targetName = this.getTargetName(scopeTarget);
       this.errorHandler.showInfo(`LSP visualization displayed for: ${targetName}`);
-      
+
       // Show performance recommendation if applicable
       if (validation.stats) {
         const recommendation = this.graphValidator.getPerformanceRecommendation(validation.stats);
@@ -174,11 +170,11 @@ export class HydroIDE {
       // Requirements addressed:
       // - 6.1: Detect when LSP extraction fails or times out
       // - 1.5: Offer cargo fallback when LSP fails
-      
+
       // Log fallback event for debugging
       this.logger.error(`LSP visualization failed: ${error}`);
       this.logger.warning('Offering cargo-based visualization as fallback');
-      
+
       // Determine error type for better user messaging
       let errorMessage = 'LSP visualization failed.';
       if (error instanceof Error) {
@@ -195,14 +191,14 @@ export class HydroIDE {
           this.logger.warning(`Failure reason: ${error.message}`);
         }
       }
-      
+
       // Show user notification with "Use Cargo" option
       const selection = await this.errorHandler.showWarning(
         `${errorMessage} Try cargo-based visualization?`,
         'Use Cargo',
         'Cancel'
       );
-      
+
       // Trigger cargo-based visualization if user accepts
       if (selection === 'Use Cargo') {
         this.logger.info('User accepted cargo fallback - switching to cargo-based visualization');
@@ -219,7 +215,7 @@ export class HydroIDE {
    */
   async visualizeScopeCargo(scopeType: ScopeType): Promise<void> {
     this.logger.section(`Visualize ${scopeType} scope (Cargo)`);
-    
+
     // Get active editor
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
@@ -242,48 +238,54 @@ export class HydroIDE {
     this.logger.keyValue('File', editor.document.fileName);
     if (scopeType === 'function') {
       const position = editor.selection.active;
-      this.logger.keyValue('Cursor position', `line ${position.line + 1}, column ${position.character + 1}`);
+      this.logger.keyValue(
+        'Cursor position',
+        `line ${position.line + 1}, column ${position.character + 1}`
+      );
     }
 
     try {
       await this.progressReporter.withCargoBuildProgress(scopeType, async (reporter, token) => {
         const steps = createCargoBuildSteps();
-        
+
         // Check for cancellation
         if (token.isCancellationRequested) {
           this.logger.warning('Operation cancelled by user');
           return;
         }
-        
+
         // Step 1: Analyze scope
         reporter(steps.analyzing);
         const scopeTarget = await this.scopeAnalyzer.analyzeScope(editor, scopeType);
         this.logger.info(`Found ${scopeTarget.functions.length} function(s)`);
-        
+
         if (token.isCancellationRequested) {
           return;
         }
-        
+
         // Step 2: Build with Cargo
         reporter(steps.building);
         const config = this.getCargoConfig(scopeTarget);
-        const buildResult = await this.cargoOrchestrator.buildWithVisualization(scopeTarget, config);
-        
+        const buildResult = await this.cargoOrchestrator.buildWithVisualization(
+          scopeTarget,
+          config
+        );
+
         if (token.isCancellationRequested) {
           return;
         }
-        
+
         // Step 3: Extract and validate JSON
         if (buildResult.success && buildResult.graphJson) {
           reporter(steps.extracting);
-          
+
           // Validate graph
           const validation = this.graphValidator.validate(buildResult.graphJson);
-          
+
           if (!validation.valid) {
             throw new Error(`Invalid graph JSON: ${validation.errors.join(', ')}`);
           }
-          
+
           // Check for large graphs
           if (validation.stats && validation.stats.isLarge) {
             const proceed = await this.graphValidator.checkLargeGraph(validation.stats);
@@ -292,39 +294,40 @@ export class HydroIDE {
               return;
             }
           }
-          
+
           if (token.isCancellationRequested) {
             return;
           }
-          
+
           // Step 4: Display in webview
           reporter(steps.rendering);
           await this.displayVisualization(scopeTarget, buildResult.graphJson);
-          
+
           // Store current state for refresh
           this.currentScopeType = scopeType;
           this.currentEditor = editor;
-          
+
           // Show success message
           const targetName = this.getTargetName(scopeTarget);
           this.errorHandler.showInfo(`Visualization displayed for: ${targetName}`);
-          
+
           // Show performance recommendation if applicable
           if (validation.stats) {
-            const recommendation = this.graphValidator.getPerformanceRecommendation(validation.stats);
+            const recommendation = this.graphValidator.getPerformanceRecommendation(
+              validation.stats
+            );
             if (recommendation) {
               this.errorHandler.showInfo(recommendation);
             }
           }
         } else if (buildResult.success) {
-          await this.errorHandler.showWarning(
-            'Build succeeded but no graph JSON was found in output',
-            'Show Output'
-          ).then(selection => {
-            if (selection === 'Show Output') {
-              this.logger.show();
-            }
-          });
+          await this.errorHandler
+            .showWarning('Build succeeded but no graph JSON was found in output', 'Show Output')
+            .then((selection) => {
+              if (selection === 'Show Output') {
+                this.logger.show();
+              }
+            });
         } else {
           throw new CargoError(
             'Cargo build failed',
@@ -347,9 +350,9 @@ export class HydroIDE {
   async visualizeScope(scopeType: ScopeType): Promise<void> {
     // Read default visualization mode from configuration
     const defaultMode = this.configManager.getDefaultVisualizationMode();
-    
+
     this.logger.info(`Using ${defaultMode} visualization mode (from configuration)`);
-    
+
     // Route to appropriate visualization method
     if (defaultMode === 'lsp') {
       await this.visualizeScopeLSP(scopeType);
@@ -364,7 +367,7 @@ export class HydroIDE {
    */
   async refresh(): Promise<void> {
     this.logger.section('Refresh Visualization');
-    
+
     if (!this.webviewManager.hasActiveVisualization()) {
       this.errorHandler.showInfo('No active visualization to refresh');
       this.logger.warning('No active visualization');
@@ -391,61 +394,67 @@ export class HydroIDE {
     this.logger.info(`Refreshing ${this.currentScopeType} scope`);
 
     try {
-      await this.progressReporter.withCargoBuildProgress(this.currentScopeType, async (reporter, token) => {
-        const steps = createCargoBuildSteps();
-        
-        if (token.isCancellationRequested) {
-          return;
-        }
-        
-        // Re-analyze scope
-        reporter(steps.analyzing);
-        const scopeTarget = await this.scopeAnalyzer.analyzeScope(
-          this.currentEditor!,
-          this.currentScopeType!
-        );
-        
-        if (token.isCancellationRequested) {
-          return;
-        }
-        
-        // Rebuild
-        reporter(steps.building);
-        const config = this.getCargoConfig(scopeTarget);
-        const buildResult = await this.cargoOrchestrator.buildWithVisualization(scopeTarget, config);
-        
-        if (token.isCancellationRequested) {
-          return;
-        }
-        
-        if (buildResult.success && buildResult.graphJson) {
-          reporter(steps.extracting);
-          
-          // Validate graph
-          const validation = this.graphValidator.validate(buildResult.graphJson);
-          if (!validation.valid) {
-            throw new Error(`Invalid graph JSON: ${validation.errors.join(', ')}`);
-          }
-          
+      await this.progressReporter.withCargoBuildProgress(
+        this.currentScopeType,
+        async (reporter, token) => {
+          const steps = createCargoBuildSteps();
+
           if (token.isCancellationRequested) {
             return;
           }
-          
-          // Refresh webview (preserves view state)
-          reporter(steps.rendering);
-          await this.webviewManager.refresh(buildResult.graphJson);
-          
-          this.errorHandler.showInfo('Visualization refreshed');
-          this.logger.info('Visualization refreshed successfully');
-        } else {
-          throw new CargoError(
-            'Refresh failed: build failed',
-            buildResult.exitCode,
-            buildResult.stderr,
-            buildResult
+
+          // Re-analyze scope
+          reporter(steps.analyzing);
+          const scopeTarget = await this.scopeAnalyzer.analyzeScope(
+            this.currentEditor!,
+            this.currentScopeType!
           );
+
+          if (token.isCancellationRequested) {
+            return;
+          }
+
+          // Rebuild
+          reporter(steps.building);
+          const config = this.getCargoConfig(scopeTarget);
+          const buildResult = await this.cargoOrchestrator.buildWithVisualization(
+            scopeTarget,
+            config
+          );
+
+          if (token.isCancellationRequested) {
+            return;
+          }
+
+          if (buildResult.success && buildResult.graphJson) {
+            reporter(steps.extracting);
+
+            // Validate graph
+            const validation = this.graphValidator.validate(buildResult.graphJson);
+            if (!validation.valid) {
+              throw new Error(`Invalid graph JSON: ${validation.errors.join(', ')}`);
+            }
+
+            if (token.isCancellationRequested) {
+              return;
+            }
+
+            // Refresh webview (preserves view state)
+            reporter(steps.rendering);
+            await this.webviewManager.refresh(buildResult.graphJson);
+
+            this.errorHandler.showInfo('Visualization refreshed');
+            this.logger.info('Visualization refreshed successfully');
+          } else {
+            throw new CargoError(
+              'Refresh failed: build failed',
+              buildResult.exitCode,
+              buildResult.stderr,
+              buildResult
+            );
+          }
         }
-      });
+      );
     } catch (error) {
       await this.errorHandler.handleError(error, 'refresh');
     }
@@ -479,7 +488,7 @@ export class HydroIDE {
     }
 
     this.logger.info(`Auto-refresh triggered by file save: ${document.fileName}`);
-    
+
     // Trigger refresh
     await this.refresh();
   }
@@ -514,7 +523,7 @@ export class HydroIDE {
         }
 
         this.logger.info(`File saved: ${document.fileName}`);
-        
+
         // Clear existing debounce timer
         if (debounceTimer) {
           clearTimeout(debounceTimer);
@@ -525,12 +534,12 @@ export class HydroIDE {
         debounceTimer = setTimeout(() => {
           this.logger.info('Debounce complete - triggering auto-refresh');
           debounceTimer = undefined;
-          
-          this.handleFileChange(document).catch(error => {
+
+          this.handleFileChange(document).catch((error) => {
             this.logger.error(`Auto-refresh failed: ${error}`);
           });
         }, DEBOUNCE_DELAY);
-        
+
         this.logger.info(`Debounce timer set (${DEBOUNCE_DELAY}ms)`);
       }
     );
@@ -544,22 +553,22 @@ export class HydroIDE {
    */
   handleConfigurationChange(): void {
     this.logger.info('Configuration changed - reloading');
-    
+
     // Reload configuration
     this.configManager.reloadConfig();
-    
+
     const newConfig = this.configManager.getConfig();
     this.logger.subsection('Updated Configuration');
     this.logger.keyValue('Auto-refresh', newConfig.autoRefresh);
     this.logger.keyValue('Release mode', newConfig.cargo.releaseMode);
     this.logger.keyValue('Large graph threshold', newConfig.performance.largeGraphThreshold);
-    
+
     // Update graph validator configuration
     this.graphValidator.updateConfig(
       newConfig.performance.largeGraphThreshold,
       newConfig.performance.warnOnLargeGraphs
     );
-    
+
     // Show notification for significant changes
     if (newConfig.autoRefresh !== this.configManager.getAutoRefresh()) {
       const status = newConfig.autoRefresh ? 'enabled' : 'disabled';
@@ -573,12 +582,12 @@ export class HydroIDE {
    */
   dispose(): void {
     this.logger.info('Disposing HydroIDE');
-    
+
     // Dispose file watcher
     if (this.fileWatcherDisposable) {
       this.fileWatcherDisposable.dispose();
     }
-    
+
     // Dispose components
     this.cargoOrchestrator.dispose();
     this.webviewManager.dispose();
@@ -589,13 +598,10 @@ export class HydroIDE {
    * Display visualization in webview
    * Private helper method
    */
-  private async displayVisualization(
-    scopeTarget: ScopeTarget,
-    graphJson: string
-  ): Promise<void> {
+  private async displayVisualization(scopeTarget: ScopeTarget, graphJson: string): Promise<void> {
     const targetName = this.getTargetName(scopeTarget);
     const graphConfig = this.configManager.getGraphConfig();
-    
+
     await this.webviewManager.showVisualization(graphJson, {
       scopeType: scopeTarget.type,
       targetName,
@@ -609,14 +615,15 @@ export class HydroIDE {
    */
   private getCargoConfig(scopeTarget: ScopeTarget): CargoConfig {
     const cargoConfig = this.configManager.getCargoConfig();
-    
+
     // Use the Cargo.toml path from scope target, or fall back to workspace root
-    const manifestPath = scopeTarget.cargoTomlPath || path.join(scopeTarget.workspaceRoot, 'Cargo.toml');
-    
+    const manifestPath =
+      scopeTarget.cargoTomlPath || path.join(scopeTarget.workspaceRoot, 'Cargo.toml');
+
     // Use the features as specified, don't automatically add viz
     // The viz functionality should be available through dev-dependencies
     const features = [...cargoConfig.features];
-    
+
     return {
       manifestPath,
       features,

@@ -15,13 +15,13 @@ let hydroIDE: HydroIDE;
 
 /**
  * Debounce timer for document change events
- * 
+ *
  * DEBOUNCING IMPLEMENTATION:
  * - Delays analysis execution until user stops typing
  * - Prevents excessive re-analysis during rapid typing
  * - Timer is reset on each document change (debounce restart)
  * - Immediate analysis bypasses debounce (on save, open, switch)
- * 
+ *
  * EXAMPLE:
  * - User types "hello" rapidly (5 keystrokes in 500ms)
  * - Without debounce: 5 analyses triggered (wasteful)
@@ -32,7 +32,7 @@ let debounceTimer: NodeJS.Timeout | undefined;
 
 /**
  * Status bar item for showing analysis status
- * 
+ *
  * Displays current analysis state in VSCode status bar:
  * - "$(sync~spin) Analyzing locations..." - Analysis in progress
  * - "$(check) Locations ready" - Analysis complete (auto-hides after 3s)
@@ -43,7 +43,7 @@ let statusBarItem: vscode.StatusBarItem | undefined;
 
 /**
  * Timer for auto-hiding the status bar
- * 
+ *
  * AUTO-HIDE LOGIC:
  * - Status bar shows for important events (analysis complete, errors)
  * - Auto-hides after 3 seconds to reduce visual clutter
@@ -54,7 +54,7 @@ let statusHideTimer: NodeJS.Timeout | undefined;
 
 /**
  * Flag to track if rust-analyzer is ready
- * 
+ *
  * RUST-ANALYZER READY DETECTION:
  * - rust-analyzer needs time to index project after startup
  * - Analysis requires semantic tokens from rust-analyzer
@@ -65,7 +65,7 @@ let rustAnalyzerReady = false;
 
 /**
  * Set of document URIs waiting for rust-analyzer to be ready
- * 
+ *
  * DEFERRED ANALYSIS QUEUE:
  * - Documents opened before rust-analyzer is ready are added here
  * - When rust-analyzer becomes ready, all queued documents are analyzed
@@ -118,22 +118,22 @@ export function activate(context: vscode.ExtensionContext) {
 
 /**
  * Show a status message in the status bar
- * 
+ *
  * STATUS BAR MANAGEMENT:
  * - Provides visual feedback about analysis state
  * - Supports auto-hide to reduce clutter after completion
  * - Clears previous auto-hide timer to prevent premature hiding
- * 
+ *
  * AUTO-HIDE BEHAVIOR:
  * - autoHide=false: Status stays visible (e.g., "Analyzing...")
  * - autoHide=true: Status hides after 3 seconds (e.g., "Ready", "Failed")
  * - Timer is cleared if new status is shown before timeout
- * 
+ *
  * USAGE EXAMPLES:
  * - showStatus('$(sync~spin) Analyzing...', false) - Show until complete
  * - showStatus('$(check) Ready', true) - Show briefly then hide
  * - showStatus('$(error) Failed', true) - Show error briefly
- * 
+ *
  * @param message The message to display (supports VSCode icons like $(sync~spin))
  * @param autoHide If true, hide the status bar after 3 seconds
  */
@@ -247,7 +247,7 @@ async function isRustAnalyzerActive(): Promise<boolean> {
   if (!rustAnalyzer) {
     return false;
   }
-  
+
   if (!rustAnalyzer.isActive) {
     try {
       await rustAnalyzer.activate();
@@ -255,7 +255,7 @@ async function isRustAnalyzerActive(): Promise<boolean> {
       return false;
     }
   }
-  
+
   return rustAnalyzer.isActive;
 }
 
@@ -267,37 +267,43 @@ async function onRustAnalyzerReady() {
   if (rustAnalyzerReady) {
     return; // Already processed
   }
-  
+
   rustAnalyzerReady = true;
   outputChannel.appendLine('[RustAnalyzer] rust-analyzer is now ready');
-  
+
   // Update status bar
   showStatus('$(check) rust-analyzer ready', true);
-  
+
   // Trigger analysis for all waiting documents
   if (documentsWaitingForAnalysis.size > 0) {
-    outputChannel.appendLine(`[RustAnalyzer] Triggering analysis for ${documentsWaitingForAnalysis.size} waiting documents`);
-    
+    outputChannel.appendLine(
+      `[RustAnalyzer] Triggering analysis for ${documentsWaitingForAnalysis.size} waiting documents`
+    );
+
     for (const uri of documentsWaitingForAnalysis) {
-      const document = vscode.workspace.textDocuments.find(doc => doc.uri.toString() === uri);
+      const document = vscode.workspace.textDocuments.find((doc) => doc.uri.toString() === uri);
       if (document) {
-        const editor = vscode.window.visibleTextEditors.find(e => e.document === document);
+        const editor = vscode.window.visibleTextEditors.find((e) => e.document === document);
         if (editor) {
-          outputChannel.appendLine(`[RustAnalyzer] Analyzing waiting document: ${document.fileName}`);
+          outputChannel.appendLine(
+            `[RustAnalyzer] Analyzing waiting document: ${document.fileName}`
+          );
           scheduleAnalysis(editor, true);
         }
       }
     }
-    
+
     documentsWaitingForAnalysis.clear();
   }
-  
+
   // Also trigger analysis for all currently visible Rust documents
   for (const editor of vscode.window.visibleTextEditors) {
     if (editor.document.languageId === 'rust') {
       const uri = editor.document.uri.toString();
       if (!documentsWaitingForAnalysis.has(uri)) {
-        outputChannel.appendLine(`[RustAnalyzer] Analyzing visible document: ${editor.document.fileName}`);
+        outputChannel.appendLine(
+          `[RustAnalyzer] Analyzing visible document: ${editor.document.fileName}`
+        );
         scheduleAnalysis(editor, true);
       }
     }
@@ -308,21 +314,26 @@ async function onRustAnalyzerReady() {
  * Check if rust-analyzer is ready and has semantic tokens for a document
  * If not ready, adds document to waiting list
  */
-async function checkRustAnalyzerReadyAndSchedule(editor: vscode.TextEditor, immediate: boolean = false): Promise<boolean> {
+async function checkRustAnalyzerReadyAndSchedule(
+  editor: vscode.TextEditor,
+  immediate: boolean = false
+): Promise<boolean> {
   if (rustAnalyzerReady) {
     scheduleAnalysis(editor, immediate);
     return true;
   }
-  
+
   // Check if rust-analyzer is active
   const isActive = await isRustAnalyzerActive();
   if (!isActive) {
-    outputChannel.appendLine(`[RustAnalyzer] rust-analyzer not active for ${editor.document.fileName}, adding to waiting list`);
+    outputChannel.appendLine(
+      `[RustAnalyzer] rust-analyzer not active for ${editor.document.fileName}, adding to waiting list`
+    );
     documentsWaitingForAnalysis.add(editor.document.uri.toString());
     showStatus('$(sync~spin) Waiting for rust-analyzer...', false);
     return false;
   }
-  
+
   // Check if semantic tokens are available
   const hasTokens = await hasSemanticTokens(editor.document);
   if (hasTokens) {
@@ -330,7 +341,9 @@ async function checkRustAnalyzerReadyAndSchedule(editor: vscode.TextEditor, imme
     await onRustAnalyzerReady();
     return true;
   } else {
-    outputChannel.appendLine(`[RustAnalyzer] Semantic tokens not ready for ${editor.document.fileName}, adding to waiting list`);
+    outputChannel.appendLine(
+      `[RustAnalyzer] Semantic tokens not ready for ${editor.document.fileName}, adding to waiting list`
+    );
     documentsWaitingForAnalysis.add(editor.document.uri.toString());
     showStatus('$(sync~spin) Waiting for rust-analyzer...', false);
     return false;
@@ -363,7 +376,7 @@ async function autoColorizeIfReady(editor: vscode.TextEditor) {
   // Check if location coloring is enabled
   const config = vscode.workspace.getConfiguration('hydroIde');
   const coloringEnabled = config.get<boolean>('locationColoring.enabled', true);
-  
+
   if (!coloringEnabled) {
     outputChannel.appendLine('[AutoColorize] Location coloring is disabled');
     return;
@@ -375,16 +388,20 @@ async function autoColorizeIfReady(editor: vscode.TextEditor) {
     return;
   }
 
-  outputChannel.appendLine(`[AutoColorize] Waiting for semantic tokens for ${editor.document.fileName}`);
+  outputChannel.appendLine(
+    `[AutoColorize] Waiting for semantic tokens for ${editor.document.fileName}`
+  );
 
   // Wait for rust-analyzer to have semantic tokens ready
   // Try up to 10 times with 500ms delays (5 seconds total)
   for (let attempt = 0; attempt < 10; attempt++) {
-    await new Promise(resolve => setTimeout(resolve, 500));
-    
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
     const hasTokens = await hasSemanticTokens(editor.document);
     if (hasTokens) {
-      outputChannel.appendLine(`[AutoColorize] Semantic tokens ready after ${(attempt + 1) * 500}ms, colorizing...`);
+      outputChannel.appendLine(
+        `[AutoColorize] Semantic tokens ready after ${(attempt + 1) * 500}ms, colorizing...`
+      );
       // Wait one more second to be safe, then colorize
       setTimeout(() => {
         locationColorizer.colorizeFile(editor);
@@ -392,14 +409,16 @@ async function autoColorizeIfReady(editor: vscode.TextEditor) {
       return;
     }
   }
-  
+
   // If we get here, rust-analyzer didn't provide tokens in time
-  outputChannel.appendLine('[AutoColorize] Timeout waiting for semantic tokens - use manual colorize command');
+  outputChannel.appendLine(
+    '[AutoColorize] Timeout waiting for semantic tokens - use manual colorize command'
+  );
 }
 
 /**
  * Schedule analysis for a document with optional debouncing
- * 
+ *
  * DEBOUNCING LOGIC:
  * 1. Check if analysis is enabled in configuration
  * 2. Verify document is a Rust file
@@ -407,7 +426,7 @@ async function autoColorizeIfReady(editor: vscode.TextEditor) {
  * 4. Get debounce delay from configuration (default: 500ms)
  * 5. Schedule analysis with setTimeout
  * 6. If immediate=true, use 0ms delay (bypass debounce)
- * 
+ *
  * DEBOUNCE RESTART:
  * - Each call clears the previous timer
  * - This delays analysis until user stops typing
@@ -418,12 +437,12 @@ async function autoColorizeIfReady(editor: vscode.TextEditor) {
  *   - Key 4: Cancel previous, schedule in 500ms
  *   - Key 5: Cancel previous, schedule in 500ms
  *   - Result: Only 1 analysis runs, 500ms after last keystroke
- * 
+ *
  * IMMEDIATE ANALYSIS:
  * - Used for: file open, file save, file switch
  * - Bypasses debounce (delay=0) for instant feedback
  * - Still clears pending debounced analysis to avoid duplicate work
- * 
+ *
  * @param editor The text editor to analyze
  * @param immediate If true, run analysis immediately without debouncing
  */
@@ -431,7 +450,7 @@ function scheduleAnalysis(editor: vscode.TextEditor, immediate: boolean = false)
   // Check if analysis is enabled in configuration
   const config = vscode.workspace.getConfiguration('hydroIde');
   const enabled = config.get<boolean>('analysis.enabled', true);
-  
+
   if (!enabled) {
     outputChannel.appendLine('[ScheduleAnalysis] Analysis is disabled');
     return;
@@ -456,7 +475,9 @@ function scheduleAnalysis(editor: vscode.TextEditor, immediate: boolean = false)
   // Schedule the analysis with setTimeout
   // Timer will be cleared if another change occurs before delay expires
   debounceTimer = setTimeout(async () => {
-    outputChannel.appendLine(`[ScheduleAnalysis] Running analysis for ${editor.document.fileName} (immediate: ${immediate})`);
+    outputChannel.appendLine(
+      `[ScheduleAnalysis] Running analysis for ${editor.document.fileName} (immediate: ${immediate})`
+    );
     await locationColorizer.colorizeFile(editor);
     debounceTimer = undefined; // Clear timer after analysis completes
   }, delay);
@@ -473,7 +494,9 @@ function registerLocationColorizationCommands(context: vscode.ExtensionContext) 
       if (editor && editor.document.languageId === 'rust') {
         const rustAnalyzerActive = await isRustAnalyzerActive();
         if (!rustAnalyzerActive) {
-          vscode.window.showWarningMessage('rust-analyzer is not active. Please wait for it to start.');
+          vscode.window.showWarningMessage(
+            'rust-analyzer is not active. Please wait for it to start.'
+          );
           return;
         }
         await locationColorizer.colorizeFile(editor);
@@ -495,7 +518,7 @@ function registerLocationColorizationCommands(context: vscode.ExtensionContext) 
   );
 
   // Handle document change events (typing)
-  // 
+  //
   // DEBOUNCED ANALYSIS ON TYPE:
   // - Triggered on every keystroke in a Rust file
   // - scheduleAnalysis() with immediate=false uses debounce delay
@@ -508,7 +531,7 @@ function registerLocationColorizationCommands(context: vscode.ExtensionContext) 
       if (editor && event.document === editor.document && event.document.languageId === 'rust') {
         const config = vscode.workspace.getConfiguration('hydroIde');
         const analyzeOnType = config.get<boolean>('analysis.analyzeOnType', true);
-        
+
         if (analyzeOnType) {
           // Schedule debounced analysis (immediate=false)
           // Timer will be reset on next keystroke
@@ -519,7 +542,7 @@ function registerLocationColorizationCommands(context: vscode.ExtensionContext) 
   );
 
   // Handle document save events
-  // 
+  //
   // IMMEDIATE ANALYSIS ON SAVE:
   // - Triggered when user saves a Rust file (Ctrl+S / Cmd+S)
   // - scheduleAnalysis() with immediate=true bypasses debounce (delay=0)
@@ -532,12 +555,12 @@ function registerLocationColorizationCommands(context: vscode.ExtensionContext) 
       if (editor && document === editor.document && document.languageId === 'rust') {
         const config = vscode.workspace.getConfiguration('hydroIde');
         const analyzeOnSave = config.get<boolean>('analysis.analyzeOnSave', true);
-        
+
         if (analyzeOnSave) {
           // Schedule immediate analysis (immediate=true, no debounce)
           scheduleAnalysis(editor, true);
         }
-        
+
         // Clear cache for this file to get fresh types from rust-analyzer
         // rust-analyzer may have updated type information after save
         locationColorizer.clearCache(document.uri.toString());
@@ -557,7 +580,7 @@ function registerLocationColorizationCommands(context: vscode.ExtensionContext) 
   );
 
   // Handle document close events
-  // 
+  //
   // CLEANUP ON DOCUMENT CLOSE:
   // - Clear pending debounce timer (no need to analyze closed document)
   // - Schedule cache invalidation after 60 seconds
@@ -572,13 +595,15 @@ function registerLocationColorizationCommands(context: vscode.ExtensionContext) 
           clearTimeout(debounceTimer);
           debounceTimer = undefined;
         }
-        
+
         // Schedule cache invalidation after 60 seconds
         // Delayed to allow quick re-open without re-analysis
         // If user re-opens within 60s, cached results are still available
         const documentUri = document.uri.toString();
         setTimeout(() => {
-          outputChannel.appendLine(`[DocumentClose] Clearing cache for closed document: ${document.fileName}`);
+          outputChannel.appendLine(
+            `[DocumentClose] Clearing cache for closed document: ${document.fileName}`
+          );
           locationAnalyzer.clearCache(documentUri);
         }, 60000); // 60 seconds delay
       }
@@ -604,7 +629,7 @@ function registerLocationColorizationCommands(context: vscode.ExtensionContext) 
         if (editor) {
           const config = vscode.workspace.getConfiguration('hydroIde');
           const coloringEnabled = config.get<boolean>('locationColoring.enabled', true);
-          
+
           if (coloringEnabled) {
             autoColorizeIfReady(editor);
           } else {
@@ -613,22 +638,26 @@ function registerLocationColorizationCommands(context: vscode.ExtensionContext) 
           }
         }
       }
-      
+
       // Handle color configuration changes
       if (e.affectsConfiguration('hydroIde.colors')) {
-        outputChannel.appendLine('[ConfigChange] Color configuration changed, clearing decoration types...');
-        
+        outputChannel.appendLine(
+          '[ConfigChange] Color configuration changed, clearing decoration types...'
+        );
+
         // Clear decoration types so they get recreated with new colors
         locationColorizer.clearDecorationTypes();
-        
+
         // Trigger re-colorization of active editor
         const editor = vscode.window.activeTextEditor;
         if (editor && editor.document.languageId === 'rust') {
           const config = vscode.workspace.getConfiguration('hydroIde');
           const coloringEnabled = config.get<boolean>('locationColoring.enabled', true);
-          
+
           if (coloringEnabled) {
-            outputChannel.appendLine('[ConfigChange] Re-colorizing active editor with new colors...');
+            outputChannel.appendLine(
+              '[ConfigChange] Re-colorizing active editor with new colors...'
+            );
             // Schedule immediate re-colorization
             scheduleAnalysis(editor, true);
           }
@@ -644,7 +673,7 @@ function registerLocationColorizationCommands(context: vscode.ExtensionContext) 
       if (editor && editor.document.languageId === 'rust') {
         const config = vscode.workspace.getConfiguration('hydroIde');
         const coloringEnabled = config.get<boolean>('locationColoring.enabled', true);
-        
+
         if (coloringEnabled) {
           // Clear old decorations and re-colorize with new theme colors
           locationColorizer.clearCache();
@@ -654,15 +683,14 @@ function registerLocationColorizationCommands(context: vscode.ExtensionContext) 
     })
   );
 
-
-
   // Colorize the currently active editor on startup
-  if (vscode.window.activeTextEditor && vscode.window.activeTextEditor.document.languageId === 'rust') {
+  if (
+    vscode.window.activeTextEditor &&
+    vscode.window.activeTextEditor.document.languageId === 'rust'
+  ) {
     checkRustAnalyzerReadyAndSchedule(vscode.window.activeTextEditor, true);
   }
 }
-
-
 
 /**
  * Set up configuration change handler
@@ -675,7 +703,7 @@ function setupConfigurationChangeHandler(context: vscode.ExtensionContext) {
       }
     })
   );
-  
+
   outputChannel.appendLine('Configuration change handler registered');
 }
 
@@ -685,7 +713,7 @@ function setupConfigurationChangeHandler(context: vscode.ExtensionContext) {
  */
 function setupRustAnalyzerReadyDetection(context: vscode.ExtensionContext) {
   outputChannel.appendLine('[RustAnalyzer] Setting up rust-analyzer ready detection');
-  
+
   // Listen for rust-analyzer extension activation
   const rustAnalyzer = vscode.extensions.getExtension('rust-lang.rust-analyzer');
   if (rustAnalyzer) {
@@ -704,27 +732,29 @@ function setupRustAnalyzerReadyDetection(context: vscode.ExtensionContext) {
         }
       }, 1000);
     } else {
-      outputChannel.appendLine('[RustAnalyzer] rust-analyzer is not active yet, will monitor for activation');
+      outputChannel.appendLine(
+        '[RustAnalyzer] rust-analyzer is not active yet, will monitor for activation'
+      );
     }
   } else {
     outputChannel.appendLine('[RustAnalyzer] rust-analyzer extension not found');
   }
-  
+
   // Periodically check if rust-analyzer becomes ready (for documents waiting for analysis)
   const checkInterval = setInterval(async () => {
     if (rustAnalyzerReady || documentsWaitingForAnalysis.size === 0) {
       return;
     }
-    
+
     // Check if rust-analyzer is now ready
     const isActive = await isRustAnalyzerActive();
     if (!isActive) {
       return;
     }
-    
+
     // Check if semantic tokens are available for any waiting document
     for (const uri of documentsWaitingForAnalysis) {
-      const document = vscode.workspace.textDocuments.find(doc => doc.uri.toString() === uri);
+      const document = vscode.workspace.textDocuments.find((doc) => doc.uri.toString() === uri);
       if (document) {
         const hasTokens = await hasSemanticTokens(document);
         if (hasTokens) {
@@ -734,33 +764,33 @@ function setupRustAnalyzerReadyDetection(context: vscode.ExtensionContext) {
       }
     }
   }, 2000); // Check every 2 seconds
-  
+
   // Clean up interval on deactivation
   context.subscriptions.push({
     dispose: () => {
       clearInterval(checkInterval);
-    }
+    },
   });
-  
+
   outputChannel.appendLine('[RustAnalyzer] rust-analyzer ready detection configured');
 }
 
 /**
  * Extension deactivation cleanup
- * 
+ *
  * CLEANUP RESPONSIBILITIES:
  * 1. Clear all timers (debounce, status hide)
  * 2. Dispose UI elements (status bar)
  * 3. Clear state (rust-analyzer ready, waiting documents)
  * 4. Clear caches (analysis cache)
  * 5. Dispose components (HydroIDE, colorizer, output channel)
- * 
+ *
  * IMPORTANCE:
  * - Prevents memory leaks from active timers
  * - Releases VSCode resources properly
  * - Ensures clean state for next activation
  * - Required for proper extension lifecycle management
- * 
+ *
  * Called when:
  * - Extension is disabled by user
  * - VSCode is closing
@@ -769,32 +799,32 @@ function setupRustAnalyzerReadyDetection(context: vscode.ExtensionContext) {
  */
 export function deactivate() {
   outputChannel.appendLine('Hydro IDE extension deactivated');
-  
+
   // Clear debounce timer to prevent analysis after deactivation
   if (debounceTimer) {
     clearTimeout(debounceTimer);
     debounceTimer = undefined;
   }
-  
+
   // Clear status hide timer to prevent UI updates after deactivation
   if (statusHideTimer) {
     clearTimeout(statusHideTimer);
     statusHideTimer = undefined;
   }
-  
+
   // Dispose status bar item to release VSCode resources
   if (statusBarItem) {
     statusBarItem.dispose();
     statusBarItem = undefined;
   }
-  
+
   // Clear rust-analyzer ready state and waiting queue
   rustAnalyzerReady = false;
   documentsWaitingForAnalysis.clear();
-  
+
   // Clear analysis cache to free memory
   locationAnalyzer.clearCache();
-  
+
   // Dispose HydroIDE (which disposes all visualization components)
   if (hydroIDE) {
     hydroIDE.dispose();
@@ -802,7 +832,7 @@ export function deactivate() {
 
   // Dispose location colorizer (clears decoration types)
   locationColorizer.dispose();
-  
+
   // Dispose output channel
   if (outputChannel) {
     outputChannel.dispose();

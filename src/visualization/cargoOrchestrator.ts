@@ -13,6 +13,7 @@ import * as path from 'path';
 import * as fs from 'fs/promises';
 import { spawn, ChildProcess } from 'child_process';
 import { ScopeTarget, HydroFunction } from '../core/types';
+import { RustParser, RustParameter } from '../analysis/rustParser';
 
 /**
  * Configuration for Cargo builds
@@ -82,9 +83,20 @@ export class CargoOrchestrator {
   private outputChannel: vscode.OutputChannel;
   private currentProcess?: ChildProcess;
   private currentProcessAbortController?: AbortController;
+  private rustParser: RustParser;
 
   constructor(outputChannel: vscode.OutputChannel) {
     this.outputChannel = outputChannel;
+    try {
+      this.rustParser = new RustParser();
+      this.outputChannel.appendLine('[CargoOrchestrator] Rust parser initialized successfully');
+    } catch (error) {
+      this.outputChannel.appendLine(
+        `[CargoOrchestrator] Warning: Rust parser initialization failed: ${error}`
+      );
+      this.outputChannel.appendLine('[CargoOrchestrator] Will use fallback parameter generation');
+      this.rustParser = null as unknown as RustParser;
+    }
   }
 
   /**
@@ -246,9 +258,9 @@ export class CargoOrchestrator {
     const imports = uniqueImports.join('\n');
 
     // Generate test body for each function
-    const testBodies = functions
-      .map((func, index) => this.generateFunctionTestBody(func, index))
-      .join('\n\n');
+    const testBodies = await Promise.all(
+      functions.map((func, index) => this.generateFunctionTestBody(func, index))
+    );
 
     return `
 // Auto-generated test file for Hydro visualization
@@ -258,7 +270,7 @@ ${imports}
 
 #[test]
 fn visualize_hydro_flows() {
-${testBodies}
+${testBodies.join('\n\n')}
 }
 `.trim();
   }
@@ -318,31 +330,28 @@ ${testBodies}
   /**
    * Generate test body code for a single function
    */
-  private generateFunctionTestBody(func: HydroFunction, index: number): string {
-    // Generate code that:
-    // 1. Creates a FlowBuilder
-    // 2. Calls the Hydro function with default parameters
-    // 3. Finalizes the builder to get the IR
-    // 4. Generates JSON using the visualization API
-    // 5. Prints JSON with markers for extraction
+  private async generateFunctionTestBody(func: HydroFunction, index: number): Promise<string> {
+    // Parse function signature to get parameter types
+    const parameters = await this.extractFunctionParameters(func);
 
-    // This approach creates Process/Cluster objects from FlowBuilder
-    // and calls the function with those parameters
+    // Generate parameter declarations and function call arguments
+    const { declarations, callArgs } = this.generateParameterCode(parameters);
+
+    // Generate the call to the function
+    const functionCall =
+      callArgs.length > 0 ? `${func.name}(${callArgs.join(', ')});` : `${func.name}();`;
 
     return `
     // Visualize function: ${func.name}
     {
-
-        
         eprintln!("[DEBUG] Step 1: Creating FlowBuilder");
         let flow = hydro_lang::compile::builder::FlowBuilder::new();
         
-        eprintln!("[DEBUG] Step 2: Creating Process and Cluster objects");
-        let leader = flow.process();
-        let workers = flow.cluster();
+        eprintln!("[DEBUG] Step 2: Creating location objects for function parameters");
+${declarations}
         
         eprintln!("[DEBUG] Step 3: Calling function ${func.name}");
-        ${func.name}(&leader, &workers);
+        ${functionCall}
         
         eprintln!("[DEBUG] Step 4: Finalizing builder");
         let built = flow.finalize();
@@ -352,10 +361,7 @@ ${testBodies}
         
         println!("__HYDRO_VIZ_JSON_START_${index}__");
         
-        // Try different API methods based on what's available
-        eprintln!("[DEBUG] Step 6: Attempting to generate JSON");
-        
-        eprintln!("[DEBUG] Using hydroscope_to_string method");
+        eprintln!("[DEBUG] Step 6: Generating JSON");
         let json_output = graph_api.hydroscope_to_string(false, true, true);
         
         eprintln!("[DEBUG] Generated {} bytes of JSON output", json_output.len());
@@ -364,6 +370,138 @@ ${testBodies}
         println!("__HYDRO_VIZ_JSON_END_${index}__");
     }
 `.trim();
+  }
+
+  /**
+   * Extract function parameters using tree-sitter parser
+   */
+  private async extractFunctionParameters(func: HydroFunction): Promise<RustParameter[]> {
+    if (!this.rustParser) {
+      this.outputChannel.appendLine(
+        `[CargoOrchestrator] Rust parser not available, using fallback`
+      );
+      return this.getFallbackParameters();
+    }
+
+    try {
+      // Read the source file
+      const sourceCode = await fs.readFile(func.filePath, 'utf-8');
+
+      // Parse all functions in the file
+      const parsedFunctions = this.rustParser.parseFunctions(sourceCode);
+
+      // Find the matching function
+      const matchingFunction = parsedFunctions.find(
+        (pf) => pf.name === func.name && pf.startLine === func.startLine
+      );
+
+      if (matchingFunction) {
+        this.outputChannel.appendLine(
+          `[CargoOrchestrator] Parsed ${matchingFunction.parameters.length} parameters for ${func.name}`
+        );
+        return matchingFunction.parameters;
+      } else {
+        this.outputChannel.appendLine(
+          `[CargoOrchestrator] Could not find parsed function ${func.name}, using fallback`
+        );
+        return this.getFallbackParameters();
+      }
+    } catch (error) {
+      this.outputChannel.appendLine(
+        `[CargoOrchestrator] Error parsing function parameters: ${error}, using fallback`
+      );
+      return this.getFallbackParameters();
+    }
+  }
+
+  /**
+   * Fallback parameter list when parsing fails
+   */
+  private getFallbackParameters(): RustParameter[] {
+    return [
+      { name: 'leader', type: "&Process<'_>" },
+      { name: 'workers', type: "&Cluster<'_>" },
+    ];
+  }
+
+  /**
+   * Generate parameter declarations and call arguments based on parameter types
+   */
+  private generateParameterCode(parameters: RustParameter[]): {
+    declarations: string;
+    callArgs: string[];
+  } {
+    const declarations: string[] = [];
+    const callArgs: string[] = [];
+
+    for (const param of parameters) {
+      const { declaration, callArg } = this.generateParameterForType(param);
+      if (declaration) {
+        declarations.push(`        ${declaration}`);
+      }
+      callArgs.push(callArg);
+    }
+
+    return {
+      declarations: declarations.join('\n'),
+      callArgs,
+    };
+  }
+
+  /**
+   * Generate code for a single parameter based on its type
+   */
+  private generateParameterForType(param: RustParameter): {
+    declaration: string | null;
+    callArg: string;
+  } {
+    const paramType = param.type.trim();
+
+    // Detect FlowBuilder parameter: &FlowBuilder<'a> or &FlowBuilder
+    if (paramType.includes('FlowBuilder')) {
+      return {
+        declaration: null, // flow is already created
+        callArg: '&flow',
+      };
+    }
+
+    // Detect Process parameter: &Process<'a> or &Process<'_, T> etc.
+    if (paramType.includes('Process')) {
+      return {
+        declaration: `let ${param.name} = flow.process();`,
+        callArg: `&${param.name}`,
+      };
+    }
+
+    // Detect Cluster parameter: &Cluster<'a> or &Cluster<'_, T> etc.
+    if (paramType.includes('Cluster')) {
+      return {
+        declaration: `let ${param.name} = flow.cluster();`,
+        callArg: `&${param.name}`,
+      };
+    }
+
+    // Detect Tick parameter: &Tick<'a> or similar
+    if (paramType.includes('Tick')) {
+      // For Tick, we need to create it on a location first
+      // This is a simplification - may need to handle this differently
+      this.outputChannel.appendLine(
+        `[CargoOrchestrator] Warning: Tick parameter detected, creating on default process`
+      );
+      return {
+        declaration: `let tick_loc = flow.process();\n        let ${param.name} = tick_loc.tick();`,
+        callArg: `&${param.name}`,
+      };
+    }
+
+    // Unknown type - log warning and skip this parameter
+    this.outputChannel.appendLine(
+      `[CargoOrchestrator] Warning: Unknown parameter type '${paramType}' for parameter '${param.name}', may cause compilation error`
+    );
+    return {
+      declaration: `// Unknown type for ${param.name}: ${paramType}`,
+      callArg: `/* ${param.name} */`,
+    };
   }
 
   /**

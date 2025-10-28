@@ -258,6 +258,26 @@ export class LSPAnalyzer {
           );
         }
 
+        // Special case for Self: try to extract location from type parameter hints in hover
+        // Example: "`Loc` = `Process<'a, P>`" in the hover description
+        if (typeString === 'Self' || typeString === '&Self') {
+          const hoverResult = await this.getFullHoverContent(document, position, timeout);
+          if (hoverResult) {
+            const locMatch = hoverResult.match(/`Loc`\s*=\s*`([^`]+)`/);
+            if (locMatch) {
+              const locType = locMatch[1];
+              this.log(`  Extracted Loc parameter from hover: "${locType}"`);
+              const locKind = this.parseLocationType(locType);
+              if (locKind) {
+                // Update lastChainLocationKind so inheritance works
+                lastChainLocationKind = locKind;
+                inDotChain = true;
+                this.log(`  Set chain location from Loc parameter: "${locKind}"`);
+              }
+            }
+          }
+        }
+
         // Reset chain tracking when we leave a chained line
         if (!isDotChainLine && inDotChain) {
           inDotChain = false;
@@ -267,19 +287,17 @@ export class LSPAnalyzer {
         // Parse location type if present
         const locationKind = this.parseLocationType(typeString);
 
-        // Special-case: Some methods like `inspect` return Self; inherit prior chain kind
+        // Special-case: Some methods like `inspect` and `clone` return Self; inherit prior chain kind
         if (!locationKind && /^&?Self\b/.test(typeString)) {
           if (addInheritedLocation('Self return type')) {
             continue;
           }
         }
         if (locationKind) {
-          // Skip generic type parameters (single uppercase letters like P, C, L, etc.)
-          // These appear in generic function signatures but aren't concrete location types
-          if (/^(Process|Cluster|External)<[A-Z]>$/.test(locationKind)) {
-            this.log(`  Skipping generic location type '${locationKind}' for '${operatorName}'`);
-            continue;
-          }
+          // Note: We used to skip Process<P>, Cluster<C>, etc. thinking they were too generic,
+          // but these are actually concrete location types where the tag is generic.
+          // Process<P> is still a Process location, Cluster<C> is still a Cluster, etc.
+          // The tag parameter doesn't affect which location type it is.
 
           // Get the range for this identifier
           const range = document.getWordRangeAtPosition(position);
@@ -1074,6 +1092,50 @@ export class LSPAnalyzer {
     }
 
     return null;
+  }
+
+  /**
+   * Get full hover content as a string for parsing type parameter hints
+   */
+  private async getFullHoverContent(
+    document: vscode.TextDocument,
+    position: vscode.Position,
+    timeout: number = 5000
+  ): Promise<string | null> {
+    try {
+      const hoverPromise = vscode.commands.executeCommand<vscode.Hover[]>(
+        'vscode.executeHoverProvider',
+        document.uri,
+        position
+      );
+
+      const hovers = await Promise.race([
+        hoverPromise,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Timeout after ${timeout}ms`)), timeout)
+        ),
+      ]);
+
+      if (!hovers || hovers.length === 0) {
+        return null;
+      }
+
+      // Combine all hover content into one string
+      let fullContent = '';
+      for (const hover of hovers) {
+        if (!hover || !hover.contents) continue;
+        for (const content of hover.contents) {
+          const contentStr = typeof content === 'string' ? content : content.value;
+          if (contentStr) {
+            fullContent += contentStr + '\n';
+          }
+        }
+      }
+
+      return fullContent || null;
+    } catch (error) {
+      return null;
+    }
   }
 
   /**

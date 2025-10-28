@@ -1,6 +1,6 @@
 /**
  * WebviewManager - Manages webview panel lifecycle and communication
- * 
+ *
  * Responsibilities:
  * - Create and manage webview panels
  * - Handle panel reuse vs. new panel creation
@@ -33,17 +33,16 @@ export interface WebviewState {
 /**
  * Message types sent from extension to webview
  */
-export type ExtensionToWebviewMessage =
-  | { 
-      type: 'updateGraph'; 
-      graphJson: string; 
-      viewState?: ViewState;
-      graphConfig?: {
-        showMetadata?: boolean;
-        showLocationGroups?: boolean;
-        useShortLabels?: boolean;
-      };
-    };
+export type ExtensionToWebviewMessage = {
+  type: 'updateGraph';
+  graphJson: string;
+  viewState?: ViewState;
+  graphConfig?: {
+    showMetadata?: boolean;
+    showLocationGroups?: boolean;
+    useShortLabels?: boolean;
+  };
+};
 
 /**
  * Message types sent from webview to extension
@@ -109,16 +108,20 @@ export class WebviewManager {
 
     // Update panel title based on scope
     if (options?.targetName) {
-      const scopeLabel = options.scopeType === 'function' ? 'Function' :
-                        options.scopeType === 'file' ? 'File' :
-                        'Workspace';
+      const scopeLabel =
+        options.scopeType === 'function'
+          ? 'Function'
+          : options.scopeType === 'file'
+            ? 'File'
+            : 'Workspace';
       this.panel!.title = `Hydro: ${scopeLabel} - ${options.targetName}`;
     }
 
     // Preserve view state if requested and available
-    const viewState = options?.preserveViewState && this.currentState?.viewState
-      ? this.currentState.viewState
-      : undefined;
+    const viewState =
+      options?.preserveViewState && this.currentState?.viewState
+        ? this.currentState.viewState
+        : undefined;
 
     // Send graph data to webview with configuration
     await this.postMessage({
@@ -199,7 +202,7 @@ export class WebviewManager {
    */
   dispose(): void {
     this.outputChannel.appendLine('[WebviewManager] Disposing');
-    
+
     if (this.panel) {
       this.panel.dispose();
       this.panel = undefined;
@@ -208,7 +211,7 @@ export class WebviewManager {
     this.currentState = undefined;
 
     // Dispose all disposables
-    this.disposables.forEach(d => d.dispose());
+    this.disposables.forEach((d) => d.dispose());
     this.disposables = [];
   }
 
@@ -223,9 +226,7 @@ export class WebviewManager {
       {
         enableScripts: true,
         retainContextWhenHidden: true,
-        localResourceRoots: [
-          vscode.Uri.joinPath(this.context.extensionUri, 'dist'),
-        ],
+        localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'dist')],
       }
     );
 
@@ -233,23 +234,21 @@ export class WebviewManager {
     this.isPanelVisible = this.panel.visible;
 
     // Set up panel disposal handler
-    const disposeListener = this.panel.onDidDispose(
-      () => {
-        this.outputChannel.appendLine('[WebviewManager] Panel disposed');
-        this.panel = undefined;
-        this.currentState = undefined;
-        this.isPanelVisible = false;
-      }
-    );
+    const disposeListener = this.panel.onDidDispose(() => {
+      this.outputChannel.appendLine('[WebviewManager] Panel disposed');
+      this.panel = undefined;
+      this.currentState = undefined;
+      this.isPanelVisible = false;
+    });
     this.disposables.push(disposeListener);
 
     // Set up visibility change handler
-    const visibilityListener = this.panel.onDidChangeViewState(
-      (e) => {
-        this.isPanelVisible = e.webviewPanel.visible;
-        this.outputChannel.appendLine(`[WebviewManager] Panel visibility changed: ${this.isPanelVisible}`);
-      }
-    );
+    const visibilityListener = this.panel.onDidChangeViewState((e) => {
+      this.isPanelVisible = e.webviewPanel.visible;
+      this.outputChannel.appendLine(
+        `[WebviewManager] Panel visibility changed: ${this.isPanelVisible}`
+      );
+    });
     this.disposables.push(visibilityListener);
 
     // Set up message handler
@@ -340,7 +339,9 @@ export class WebviewManager {
         break;
 
       default:
-        this.outputChannel.appendLine(`[WebviewManager] Unknown message type: ${(message as { type?: string }).type}`);
+        this.outputChannel.appendLine(
+          `[WebviewManager] Unknown message type: ${(message as { type?: string }).type}`
+        );
     }
   }
 

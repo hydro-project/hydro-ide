@@ -12,6 +12,8 @@ import { ScopeTarget } from '../core/types';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import { TreeSitterRustParser, OperatorNode as TreeSitterOperatorNode } from './treeSitterParser';
+import { GraphBuilder } from './graphBuilder';
+import { OperatorRegistry } from './operatorRegistry';
 
 // Import LocationInfo type for internal use
 import type { LocationInfo } from './locationAnalyzer';
@@ -176,6 +178,7 @@ export class LSPGraphExtractor {
   private cacheHits: number;
   private cacheMisses: number;
   private treeSitterParser: TreeSitterRustParser;
+  private graphBuilder: GraphBuilder;
 
   /**
    * Create a new LSP Graph Extractor
@@ -189,11 +192,15 @@ export class LSPGraphExtractor {
     this.cacheHits = 0;
     this.cacheMisses = 0;
     this.treeSitterParser = new TreeSitterRustParser(outputChannel);
+    
+    // Initialize GraphBuilder with dependencies
+    const operatorRegistry = OperatorRegistry.getInstance();
+    this.graphBuilder = new GraphBuilder(this.treeSitterParser, operatorRegistry, outputChannel);
 
     // Initialize the locationAnalyzer module with the output channel
     locationAnalyzer.initialize(outputChannel);
 
-    this.log('LSPGraphExtractor initialized with tree-sitter parser');
+    this.log('LSPGraphExtractor initialized with tree-sitter parser and GraphBuilder');
   }
 
   /**
@@ -424,7 +431,7 @@ export class LSPGraphExtractor {
     try {
       // Step 1: Build reliable structure from tree-sitter
       this.log('Step 1: Building graph structure from tree-sitter...');
-      const { nodes, edges } = this.buildOperatorChainsFromTreeSitter(document, scopeTarget);
+      const { nodes, edges } = this.graphBuilder.buildFromTreeSitter(document, scopeTarget);
       this.log(`Tree-sitter created ${nodes.length} nodes and ${edges.length} edges`);
 
       // Step 2: Get LSP location information for semantic enhancement
@@ -440,7 +447,7 @@ export class LSPGraphExtractor {
 
       // Step 3: Enhance tree-sitter nodes with LSP semantic information (best-effort)
       this.log('Step 3: Enhancing nodes with LSP semantic information...');
-      this.enhanceNodesWithLSPInfo(nodes, locations, document);
+      this.graphBuilder.enhanceWithLSP(nodes, locations, document);
 
       // Step 4: Build hierarchies (Location + Code) from enhanced nodes
       const hierarchyData = this.buildLocationAndCodeHierarchies(document, nodes, edges);
@@ -531,297 +538,9 @@ export class LSPGraphExtractor {
    * @param scopeTarget The scope target for filtering
    * @returns Object containing both nodes and edges from tree-sitter analysis
    */
-  private buildOperatorChainsFromTreeSitter(
-    document: vscode.TextDocument,
-    _scopeTarget: ScopeTarget
-  ): { nodes: Node[]; edges: Edge[] } {
-    const nodes: Node[] = [];
-    const edges: Edge[] = [];
-    let nodeIdCounter = 0;
-    let edgeIdCounter = 0;
 
-    // Parse variable bindings and standalone chains using tree-sitter
-    const variableChains = this.treeSitterParser.parseVariableBindings(document);
-    const standaloneChains = this.treeSitterParser.parseStandaloneChains(document);
 
-    this.log(
-      `Tree-sitter found ${variableChains.length} variable chains and ${standaloneChains.length} standalone chains`
-    );
 
-    // Create a map to track nodes by position to avoid duplicates
-    const operatorToNode = new Map<string, Node>();
-
-    // Map from variable names to their last operator node (for creating inter-variable edges)
-    const variableToLastNode = new Map<string, Node>();
-
-    // Helper function to create or get node for an operator
-    const getOrCreateNode = (op: TreeSitterOperatorNode): Node | null => {
-      const key = `${op.line}:${op.column}:${op.name}`;
-
-      if (operatorToNode.has(key)) {
-        return operatorToNode.get(key)!;
-      }
-
-      // Check if this is a known dataflow operator
-      if (!this.isKnownDataflowOperator(op.name)) {
-        this.log(`Skipping unknown operator: ${op.name}`);
-        return null;
-      }
-
-      // Create new node
-      const nodeId = String(nodeIdCounter++);
-      const nodeType = this.inferNodeType(op.name);
-
-      // Extract context for full label
-      const lineText = document.lineAt(op.line).text;
-      const contextStart = Math.max(0, op.column - 10);
-      const contextEnd = Math.min(lineText.length, op.column + op.name.length + 10);
-      const fullLabel = lineText.substring(contextStart, contextEnd).trim();
-
-      // Scope tick variable by enclosing function to prevent collisions across scopes
-      let scopedTickVariable: string | undefined = undefined;
-      if (op.tickVariable) {
-        const fnName =
-          this.treeSitterParser.findEnclosingFunctionName(document, op.line) || '(top-level)';
-        scopedTickVariable = `${fnName}::${op.tickVariable}`;
-      }
-
-      const node: Node = {
-        id: nodeId,
-        nodeType,
-        shortLabel: op.name,
-        fullLabel: fullLabel || op.name,
-        label: op.name,
-        data: {
-          locationId: null, // Will be enhanced by LSP if available
-          locationType: null,
-          locationKind: undefined,
-          tickVariable: scopedTickVariable, // Track scoped tick variable for temporal operators
-          backtrace: [],
-          // Store tree-sitter position for LSP enhancement
-          treeSitterPosition: {
-            line: op.line,
-            column: op.column,
-          },
-        },
-      };
-
-      operatorToNode.set(key, node);
-      nodes.push(node);
-
-      this.log(`Created node for ${op.name} at line ${op.line}`);
-      return node;
-    };
-
-    // Process variable binding chains
-    for (const binding of variableChains) {
-      this.log(
-        `Processing variable chain '${binding.varName}' with ${binding.operators.length} operators`
-      );
-
-      // Create nodes for all valid operators first
-      const validNodes: { node: Node; index: number }[] = [];
-      for (let i = 0; i < binding.operators.length; i++) {
-        const node = getOrCreateNode(binding.operators[i]);
-        if (node) {
-          validNodes.push({ node, index: i });
-        }
-      }
-
-      // If this variable chain starts from a previously-defined variable reference
-      // (e.g., `let reduced = batches\n  .into_keyed()...`), create an inter-variable edge
-      if (binding.operators.length > 0 && validNodes.length > 0 && variableToLastNode.size > 0) {
-        const firstOpLine = binding.operators[0].line;
-        const variableNames = Array.from(variableToLastNode.keys());
-        const referencedVar = this.detectVariableReference(document, firstOpLine, variableNames);
-        if (referencedVar) {
-          const lastNode = variableToLastNode.get(referencedVar);
-          if (lastNode) {
-            edges.push({
-              id: String(edgeIdCounter++),
-              source: lastNode.id,
-              target: validNodes[0].node.id,
-              semanticTags: [],
-            });
-            this.log(
-              `Created inter-variable edge: ${lastNode.shortLabel} -> ${validNodes[0].node.shortLabel} (via variable '${referencedVar}')`
-            );
-          }
-        }
-      }
-
-      // Create edges between consecutive valid nodes (bridging over skipped operators)
-      for (let i = 0; i < validNodes.length - 1; i++) {
-        const sourceNode = validNodes[i].node;
-        const targetNode = validNodes[i + 1].node;
-
-        edges.push({
-          id: String(edgeIdCounter++),
-          source: sourceNode.id,
-          target: targetNode.id,
-          semanticTags: [], // Empty semantic tags for tree-sitter edges
-        });
-        this.log(`Created edge: ${sourceNode.shortLabel} -> ${targetNode.shortLabel}`);
-      }
-
-      // Track the last node in this variable's chain for inter-variable edges
-      if (validNodes.length > 0) {
-        const lastNode = validNodes[validNodes.length - 1].node;
-        variableToLastNode.set(binding.varName, lastNode);
-        this.log(
-          `Tracked last operator '${lastNode.shortLabel}' for variable '${binding.varName}'`
-        );
-      }
-    }
-
-    // Process standalone chains
-    for (const chain of standaloneChains) {
-      this.log(`Processing standalone chain with ${chain.length} operators`);
-
-      // Create nodes for all valid operators first
-      const validNodes: Node[] = [];
-      for (const op of chain) {
-        const node = getOrCreateNode(op);
-        if (node) {
-          validNodes.push(node);
-        }
-      }
-
-      // Create edges between consecutive valid nodes (bridging over skipped operators)
-      for (let i = 0; i < validNodes.length - 1; i++) {
-        const sourceNode = validNodes[i];
-        const targetNode = validNodes[i + 1];
-
-        edges.push({
-          id: String(edgeIdCounter++),
-          source: sourceNode.id,
-          target: targetNode.id,
-          semanticTags: [], // Empty semantic tags for tree-sitter edges
-        });
-        this.log(`Created edge: ${sourceNode.shortLabel} -> ${targetNode.shortLabel}`);
-      }
-
-      // Check if this standalone chain starts with a variable reference
-      // Example: reduced.snapshot(...) where 'reduced' was assigned earlier
-      if (chain.length > 0 && validNodes.length > 0) {
-        const firstOp = chain[0];
-        const variableNames = Array.from(variableToLastNode.keys());
-        const referencedVar = this.detectVariableReference(document, firstOp.line, variableNames);
-
-        if (referencedVar) {
-          const lastNode = variableToLastNode.get(referencedVar);
-          if (lastNode) {
-            // Create edge from the variable's last operator to this chain's first operator
-            edges.push({
-              id: String(edgeIdCounter++),
-              source: lastNode.id,
-              target: validNodes[0].id,
-              semanticTags: [], // Empty semantic tags for tree-sitter edges
-            });
-            this.log(
-              `Created inter-variable edge: ${lastNode.shortLabel} -> ${validNodes[0].shortLabel} (via variable '${referencedVar}')`
-            );
-          }
-        }
-      }
-    }
-
-    this.log(`Built ${nodes.length} nodes and ${edges.length} edges from tree-sitter`);
-    return { nodes, edges };
-  }
-
-  /**
-   * Enhance tree-sitter nodes with LSP semantic information
-   *
-   * This is a best-effort enhancement that adds location hierarchy and type information
-   * when available from LSP, without breaking the core tree-sitter structure.
-   *
-   * @param nodes Nodes created from tree-sitter
-   * @param locations LSP location information
-   * @param document The document being analyzed
-   */
-  private enhanceNodesWithLSPInfo(
-    nodes: Node[],
-    locations: LocationInfo[],
-    document: vscode.TextDocument
-  ): void {
-    this.log(
-      `Enhancing ${nodes.length} nodes with LSP information from ${locations.length} locations`
-    );
-
-    let enhancedCount = 0;
-
-    for (const node of nodes) {
-      const treeSitterPos = node.data.treeSitterPosition;
-      if (!treeSitterPos) continue;
-
-      // Try to find matching LSP location information
-      let bestMatch: LocationInfo | null = null;
-      let bestDistance = Infinity;
-
-      for (const location of locations) {
-        if (location.operatorName !== node.shortLabel) continue;
-
-        const lspLine = location.range.start.line;
-        const lspColumn = location.range.start.character;
-
-        // Calculate distance between tree-sitter and LSP positions
-        const lineDistance = Math.abs(treeSitterPos.line - lspLine);
-        const columnDistance = Math.abs(treeSitterPos.column - lspColumn);
-        const totalDistance = lineDistance * 100 + columnDistance; // Weight lines more heavily
-
-        if (totalDistance < bestDistance) {
-          bestDistance = totalDistance;
-          bestMatch = location;
-        }
-      }
-
-      // If we found a reasonable match, enhance the node
-      if (bestMatch && bestDistance < 300) {
-        // Allow some tolerance
-        node.data.locationId = this.getLocationId(bestMatch.locationKind);
-        node.data.locationType = this.getLocationType(bestMatch.locationKind);
-        node.data.locationKind = bestMatch.locationKind || undefined;
-
-        // Update full label with LSP context if available
-        try {
-          const lspFullLabel = this.extractFullLabel(document, bestMatch.range);
-          if (lspFullLabel && lspFullLabel.length > node.fullLabel.length) {
-            node.fullLabel = lspFullLabel;
-          }
-        } catch (error) {
-          // Keep existing full label if LSP extraction fails
-        }
-
-        enhancedCount++;
-        this.log(`Enhanced node ${node.shortLabel} with LSP info (distance: ${bestDistance})`);
-      } else {
-        this.log(`No LSP enhancement for ${node.shortLabel} (best distance: ${bestDistance})`);
-      }
-    }
-
-    this.log(`Enhanced ${enhancedCount} of ${nodes.length} nodes with LSP information`);
-
-    // Assign default locations to nodes that didn't get LSP enhancement
-    this.assignDefaultLocations(nodes);
-  }
-
-  /**
-   * Assign default locations to nodes that don't have LSP location information
-   *
-   * REMOVED: This function previously assigned fake location names like "Leader" and "Worker"
-   * which don't exist in user code. Nodes without location information now get assigned to
-   * an "(unknown location)" container during hierarchy building instead.
-   *
-   * @param _nodes Array of nodes to process (currently unused)
-   */
-  private assignDefaultLocations(_nodes: Node[]): void {
-    // No longer assign fake location names
-    // Nodes without location info will be handled by hierarchy building
-    this.log(
-      `Skipping default location assignment - nodes without locations will be grouped as "(unknown location)"`
-    );
-  }
 
   /**
    * Extract nodes from Hydro operators using hybrid LSP + tree-sitter approach
@@ -2397,204 +2116,7 @@ export class LSPGraphExtractor {
    * @param operatorName The operator name (e.g., "map", "filter", "join")
    * @returns The inferred node type
    */
-  private inferNodeType(operatorName: string): NodeType {
-    // Source operators: produce data
-    if (
-      /^(source_iter|source_stream|source_stdin|recv_stream|recv_bincode|recv_bytes)$/.test(
-        operatorName
-      )
-    ) {
-      return 'Source';
-    }
 
-    // Sink operators: consume data
-    if (/^(dest_sink|for_each|inspect|dest_file|assert|assert_eq)$/.test(operatorName)) {
-      return 'Sink';
-    }
-
-    // Join operators: combine multiple streams
-    if (/^(join|cross_product|anti_join|cross_join|difference|join_multiset)$/.test(operatorName)) {
-      return 'Join';
-    }
-
-    // Network operators: send/receive across locations
-    if (
-      /^(send_bincode|broadcast_bincode|demux_bincode|round_robin_bincode|send_bytes|broadcast_bytes|demux_bytes|network)$/.test(
-        operatorName
-      )
-    ) {
-      return 'Network';
-    }
-
-    // Aggregation operators: reduce/fold operations
-    if (
-      /^(fold|reduce|fold_keyed|reduce_keyed|count|sum|min|max|sort|sort_by)$/.test(operatorName)
-    ) {
-      return 'Aggregation';
-    }
-
-    // Tee operators: split/persist streams
-    if (/^(tee|persist|clone)$/.test(operatorName)) {
-      return 'Tee';
-    }
-
-    // Default: Transform
-    return 'Transform';
-  }
-
-  /**
-   * Extract full label from operator code context
-   *
-   * Reads the source code text from the operator range and extracts
-   * the operator call with parameters (e.g., "map(|x| x + 1)").
-   * Truncates long expressions for readability.
-   *
-   * @param document The document being analyzed
-   * @param range The range of the operator in the document
-   * @returns The full label string
-   */
-  private extractFullLabel(document: vscode.TextDocument, range: vscode.Range): string {
-    try {
-      // Get the line containing the operator
-      const line = document.lineAt(range.start.line);
-      const lineText = line.text;
-
-      // Find the operator name in the line
-      const operatorStart = range.start.character;
-      const operatorEnd = range.end.character;
-      const operatorName = lineText.substring(operatorStart, operatorEnd);
-
-      // Look for opening parenthesis after the operator
-      let searchStart = operatorEnd;
-      while (searchStart < lineText.length && /\s/.test(lineText[searchStart])) {
-        searchStart++;
-      }
-
-      if (searchStart >= lineText.length || lineText[searchStart] !== '(') {
-        // No parameters, just return the operator name
-        return operatorName;
-      }
-
-      // Find matching closing parenthesis
-      let parenDepth = 0;
-      let endPos = searchStart;
-      let foundEnd = false;
-
-      // Search within the current line first
-      for (let i = searchStart; i < lineText.length; i++) {
-        const char = lineText[i];
-        if (char === '(') {
-          parenDepth++;
-        } else if (char === ')') {
-          parenDepth--;
-          if (parenDepth === 0) {
-            endPos = i + 1;
-            foundEnd = true;
-            break;
-          }
-        }
-      }
-
-      // If not found on same line, search subsequent lines (multi-line operator call)
-      if (!foundEnd) {
-        let currentLine = range.start.line + 1;
-        const maxLinesToSearch = 10; // Limit search to avoid performance issues
-        let linesSearched = 0;
-
-        while (currentLine < document.lineCount && linesSearched < maxLinesToSearch) {
-          const nextLine = document.lineAt(currentLine);
-          const nextText = nextLine.text;
-
-          for (let i = 0; i < nextText.length; i++) {
-            const char = nextText[i];
-            if (char === '(') {
-              parenDepth++;
-            } else if (char === ')') {
-              parenDepth--;
-              if (parenDepth === 0) {
-                // Found the end on a different line
-                // For multi-line, just use operator name with "..."
-                return `${operatorName}(...)`;
-              }
-            }
-          }
-
-          currentLine++;
-          linesSearched++;
-        }
-
-        // Couldn't find end within reasonable search
-        return `${operatorName}(...)`;
-      }
-
-      // Extract the full operator call
-      let fullCall = lineText.substring(operatorStart, endPos);
-
-      // Truncate if too long (for readability)
-      const maxLength = 80;
-      if (fullCall.length > maxLength) {
-        // Try to truncate at a reasonable point
-        const truncated = fullCall.substring(0, maxLength - 3);
-        // Find last complete token
-        const lastSpace = truncated.lastIndexOf(' ');
-        const lastComma = truncated.lastIndexOf(',');
-        const lastPipe = truncated.lastIndexOf('|');
-        const cutPoint = Math.max(lastSpace, lastComma, lastPipe);
-
-        if (cutPoint > operatorName.length + 5) {
-          fullCall = truncated.substring(0, cutPoint) + '...)';
-        } else {
-          fullCall = truncated + '...)';
-        }
-      }
-
-      return fullCall;
-    } catch (error) {
-      // On error, return just the operator name
-      if (error instanceof Error) {
-        this.log(`WARNING: Error extracting full label: ${error.message}`);
-      }
-      return document.getText(range);
-    }
-  }
-
-  /**
-   * Extract location ID from location kind string
-   *
-   * Normalizes location kinds to prevent duplicate containers for the same logical location.
-   * For example, "Process<Leader>" and "Tick<Process<Leader>>" should map to the same container.
-   *
-   * @param locationKind The location kind (e.g., "Process<Leader>")
-   * @returns Numeric location ID or null
-   */
-  private getLocationId(locationKind: string): number | null {
-    // Normalize the location kind by removing Tick wrappers
-    const normalized = this.normalizeLocationKind(locationKind);
-
-    // Use a simple hash of the normalized location kind
-    let hash = 0;
-    for (let i = 0; i < normalized.length; i++) {
-      const char = normalized.charCodeAt(i);
-      hash = (hash << 5) - hash + char;
-      hash = hash & hash; // Convert to 32-bit integer
-    }
-    return Math.abs(hash);
-  }
-
-  /**
-   * Normalize location kind string for consistent hierarchy grouping
-   *
-   * @param locationKind The raw location kind
-   * @returns Normalized location kind
-   */
-  private normalizeLocationKind(locationKind: string): string {
-    // Strip Tick wrappers to get the base location
-    let normalized = locationKind;
-    while (normalized.startsWith('Tick<') && normalized.endsWith('>')) {
-      normalized = normalized.substring(5, normalized.length - 1);
-    }
-    return normalized;
-  }
 
   /**
    * Check if an operator is a valid dataflow operator based on its return type
@@ -2833,21 +2355,7 @@ export class LSPGraphExtractor {
    * @param locationKind The location kind (e.g., "Process<Leader>", "Tick<Cluster<Worker>>")
    * @returns Location type string or null
    */
-  private getLocationType(locationKind: string): string | null {
-    // Strip Tick wrappers to get the base location type
-    let unwrapped = locationKind;
-    while (unwrapped.startsWith('Tick<') && unwrapped.endsWith('>')) {
-      unwrapped = unwrapped.substring(5, unwrapped.length - 1);
-    }
 
-    // Extract the base location type (Process, Cluster, External)
-    const match = unwrapped.match(/^(Process|Cluster|External)</);
-    if (match) {
-      return match[1];
-    }
-
-    return null;
-  }
 
   /**
    * Assemble Hydroscope JSON from extracted components

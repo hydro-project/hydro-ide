@@ -70,34 +70,47 @@ describe('Paxos Graph Extraction', () => {
     const code = fs.readFileSync(paxosPath, 'utf8');
     const doc = createMockDocument(code, paxosPath);
 
-    // Build nodes/edges from tree-sitter
+    // Build nodes/edges from tree-sitter using GraphBuilder (Phase 3.1 refactoring)
     const { nodes, edges } = (
       extractor as unknown as {
-        buildOperatorChainsFromTreeSitter: (
-          doc: vscode.TextDocument,
-          scope: { type: string; functions: unknown[]; workspaceRoot: string }
-        ) => { nodes: GNode[]; edges: GEdge[] };
+        graphBuilder: {
+          buildFromTreeSitter: (
+            doc: vscode.TextDocument,
+            scope: { type: string; functions: unknown[]; workspaceRoot: string }
+          ) => { nodes: GNode[]; edges: GEdge[] };
+          enhanceWithLSP: (
+            nodes: GNode[],
+            locations: Array<{
+              operatorName: string;
+              range: vscode.Range;
+              locationKind: string | null;
+            }>,
+            doc: vscode.TextDocument
+          ) => void;
+        };
       }
-    ).buildOperatorChainsFromTreeSitter(doc, {
+    ).graphBuilder.buildFromTreeSitter(doc, {
       type: 'file',
       functions: [],
       workspaceRoot: process.cwd(),
     });
 
-    // Enhance with default locations (no LSP)
+    // Enhance with default locations (no LSP) using GraphBuilder
     (
       extractor as unknown as {
-        enhanceNodesWithLSPInfo: (
-          nodes: GNode[],
-          locations: Array<{
-            operatorName: string;
-            range: vscode.Range;
-            locationKind: string | null;
-          }>,
-          doc: vscode.TextDocument
-        ) => void;
+        graphBuilder: {
+          enhanceWithLSP: (
+            nodes: GNode[],
+            locations: Array<{
+              operatorName: string;
+              range: vscode.Range;
+              locationKind: string | null;
+            }>,
+            doc: vscode.TextDocument
+          ) => void;
+        };
       }
-    ).enhanceNodesWithLSPInfo(nodes, [], doc);
+    ).graphBuilder.enhanceWithLSP(nodes, [], doc);
 
     // Build hierarchies
     const hier = (

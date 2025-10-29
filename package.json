@@ -440,12 +440,12 @@
     "package:pre-release": "vsce package --pre-release",
     "verify-vsix": "./scripts/verify-vsix.sh",
     "pretest": "npm run compile",
-    "test": "node ./out/test/runTest.js",
+    "test": "npm run test:unit && npm run test:integration",
     "test:unit": "vitest run",
     "test:unit:watch": "vitest",
     "test:unit:ui": "vitest --ui",
-    "test:integration": "npm run compile && node ./out/test/runTest.js",
-    "test:all": "npm run test:unit && npm run test:integration"
+    "test:integration": "node ./out/test/runTest.js",
+    "test:all": "npm test"
   },
   "devDependencies": {
     "@types/glob": "^8.1.0",

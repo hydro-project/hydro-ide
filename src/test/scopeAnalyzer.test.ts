@@ -1,6 +1,6 @@
 /**
  * Unit tests for ScopeAnalyzer
- * 
+ *
  * Tests function detection with various Hydro patterns, file-level analysis,
  * and edge cases like no Hydro code and malformed syntax.
  */
@@ -10,10 +10,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fsPromises from 'fs/promises';
 import { ScopeAnalyzer } from '../analysis/scopeAnalyzer';
-import {
-  ScopeDetectionError,
-  ScopeErrorCategory,
-} from '../core/types';
+import { ScopeDetectionError, ScopeErrorCategory } from '../core/types';
 
 /**
  * Mock output channel for testing
@@ -75,8 +72,6 @@ suite('ScopeAnalyzer Test Suite', () => {
       assert.strictEqual(result.functions[0].name, 'hello_world_flow');
       assert.ok(result.workspaceRoot);
     });
-
-
 
     test.skip('Should detect function returning Dfir type - LSP dependent', async () => {
       const testFilePath = path.join(
@@ -199,10 +194,7 @@ suite('ScopeAnalyzer Test Suite', () => {
 
       // All functions should have valid line numbers
       result.functions.forEach((func) => {
-        assert.ok(
-          func.startLine >= 0,
-          `Function ${func.name} should have valid start line`
-        );
+        assert.ok(func.startLine >= 0, `Function ${func.name} should have valid start line`);
         assert.ok(
           func.endLine >= func.startLine,
           `Function ${func.name} end line should be >= start line`
@@ -242,10 +234,7 @@ suite('ScopeAnalyzer Test Suite', () => {
       const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
       assert.ok(workspaceFolder, 'Workspace folder should exist');
 
-      const tempFilePath = path.join(
-        workspaceFolder.uri.fsPath,
-        'temp_no_hydro.rs'
-      );
+      const tempFilePath = path.join(workspaceFolder.uri.fsPath, 'temp_no_hydro.rs');
 
       const nonHydroCode = `
 // Regular Rust code without Hydro
@@ -292,10 +281,7 @@ pub fn another_function(x: i32) -> i32 {
       const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
       assert.ok(workspaceFolder, 'Workspace folder should exist');
 
-      const tempFilePath = path.join(
-        workspaceFolder.uri.fsPath,
-        'temp_malformed.rs'
-      );
+      const tempFilePath = path.join(workspaceFolder.uri.fsPath, 'temp_malformed.rs');
 
       // Code with semantic errors but valid structure for parsing
       const malformedCode = `
@@ -332,12 +318,9 @@ pub fn valid_function() -> impl Flow {
           result.functions.length >= 2,
           `Should find at least 2 functions, found ${result.functions.length}`
         );
-        
+
         const functionNames = result.functions.map((f) => f.name);
-        assert.ok(
-          functionNames.includes('valid_function'),
-          'Should find valid_function'
-        );
+        assert.ok(functionNames.includes('valid_function'), 'Should find valid_function');
       } finally {
         // Clean up temp file
         try {
@@ -353,10 +336,7 @@ pub fn valid_function() -> impl Flow {
       const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
       assert.ok(workspaceFolder, 'Workspace folder should exist');
 
-      const tempFilePath = path.join(
-        workspaceFolder.uri.fsPath,
-        'temp_nested.rs'
-      );
+      const tempFilePath = path.join(workspaceFolder.uri.fsPath, 'temp_nested.rs');
 
       const nestedCode = `
 use hydro::prelude::*;
@@ -465,10 +445,7 @@ pub fn outer_function() -> impl Flow {
 
       // Should find functions from multiple files
       const uniqueFiles = new Set(result.functions.map((f) => f.filePath));
-      assert.ok(
-        uniqueFiles.size >= 3,
-        'Should find functions from at least 3 files'
-      );
+      assert.ok(uniqueFiles.size >= 3, 'Should find functions from at least 3 files');
     });
 
     test.skip('Should aggregate functions from all files - LSP dependent', async () => {
@@ -485,55 +462,6 @@ pub fn outer_function() -> impl Flow {
         result.functions.length >= 15,
         `Should find at least 15 functions, found ${result.functions.length}`
       );
-    });
-  });
-
-  suite('Hydro Pattern Detection', () => {
-
-
-    test('Should detect Hydro imports', async () => {
-      const testFilePath = path.join(
-        __dirname,
-        '../../test-fixtures/sample-hydro-project/src/simple_flows.rs'
-      );
-
-      const document = await vscode.workspace.openTextDocument(testFilePath);
-
-      const isLikely = await analyzer.isLikelyHydroFile(document);
-      assert.strictEqual(isLikely, true, 'Should detect Hydro imports');
-    });
-
-    test('Should not detect Hydro in non-Hydro files', async () => {
-      // Create a temporary file with no Hydro code
-      const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-      assert.ok(workspaceFolder, 'Workspace folder should exist');
-
-      const tempFilePath = path.join(
-        workspaceFolder.uri.fsPath,
-        'temp_regular.rs'
-      );
-
-      const regularCode = `
-pub fn regular_function() -> i32 {
-    42
-}
-`;
-
-      await fsPromises.writeFile(tempFilePath, regularCode);
-
-      try {
-        const document = await vscode.workspace.openTextDocument(tempFilePath);
-
-        const isLikely = await analyzer.isLikelyHydroFile(document);
-        assert.strictEqual(isLikely, false, 'Should not detect Hydro in regular file');
-      } finally {
-        // Clean up temp file
-        try {
-          await fsPromises.unlink(tempFilePath);
-        } catch {
-          // Ignore cleanup errors
-        }
-      }
     });
   });
 });

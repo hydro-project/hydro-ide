@@ -1,6 +1,6 @@
 /**
  * ScopeAnalyzer - Detects and analyzes Hydro code in Rust source files
- * 
+ *
  * This class is responsible for:
  * - Identifying Hydro functions at different scopes (function, file, workspace)
  * - Parsing Rust source code to extract function metadata
@@ -35,24 +35,25 @@ const DEFAULT_CONFIG: ScopeAnalyzerConfig = {
 const HYDRO_PATTERNS = {
   /** Hydro attribute pattern: #[hydro::flow] or #[hydro_lang::flow] */
   attribute: /#\[(?:hydro|hydro_lang)::(?:flow|main)\]/,
-  
+
   /** Hydro macro pattern: hydro_lang::flow! or hydro::flow! */
   macro: /(?:hydro|hydro_lang)::flow!\s*\(/,
-  
+
   /** Function definition pattern */
   functionDef: /(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/,
-  
+
   /** Hydro imports */
   hydroImport: /use\s+(?:hydro|hydro_lang|dfir_rs)(?:::|;)/,
-  
+
   /** FlowBuilder parameter pattern: &FlowBuilder<'a> or similar */
   flowBuilderParam: /&\s*FlowBuilder\s*(?:<[^>]*>)?/,
-  
+
   /** FlowBuilder method calls: flow.cluster(), flow.process(), flow.external() */
   flowBuilderMethods: /\b(?:flow|builder)\s*\.\s*(?:cluster|process|external|tick)\s*\(/,
-  
+
   /** Hydro method chains: .map(), .fold(), .send_bincode(), etc. */
-  hydroMethodChains: /\.\s*(?:map|filter|fold|reduce|send_bincode|send_partitioned|cross_product|batch|persist|all_ticks|for_each|inspect|source_iter|source_external_bincode|decouple_cluster|decouple_process|demux_bincode|assume_ordering|assume_retries|sample_every|key_count)\s*\(/,
+  hydroMethodChains:
+    /\.\s*(?:map|filter|fold|reduce|send_bincode|send_partitioned|cross_product|batch|persist|all_ticks|for_each|inspect|source_iter|source_external_bincode|decouple_cluster|decouple_process|demux_bincode|assume_ordering|assume_retries|sample_every|key_count)\s*\(/,
 };
 
 /**
@@ -70,18 +71,17 @@ export class ScopeAnalyzer {
   private outputChannel: vscode.OutputChannel;
   private rustParser: RustParser;
 
-  constructor(
-    outputChannel: vscode.OutputChannel,
-    config: Partial<ScopeAnalyzerConfig> = {}
-  ) {
+  constructor(outputChannel: vscode.OutputChannel, config: Partial<ScopeAnalyzerConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.outputChannel = outputChannel;
-    
+
     try {
       this.rustParser = new RustParser();
       this.outputChannel.appendLine('[ScopeAnalyzer] Tree-sitter parser initialized successfully');
     } catch (error) {
-      this.outputChannel.appendLine(`[ScopeAnalyzer] Warning: Tree-sitter initialization failed: ${error}`);
+      this.outputChannel.appendLine(
+        `[ScopeAnalyzer] Warning: Tree-sitter initialization failed: ${error}`
+      );
       this.outputChannel.appendLine('[ScopeAnalyzer] Will use legacy regex-based parsing');
       this.rustParser = null as unknown as RustParser; // Will trigger fallback
     }
@@ -90,10 +90,7 @@ export class ScopeAnalyzer {
   /**
    * Analyze scope based on editor state and scope type
    */
-  async analyzeScope(
-    editor: vscode.TextEditor,
-    scopeType: ScopeType
-  ): Promise<ScopeTarget> {
+  async analyzeScope(editor: vscode.TextEditor, scopeType: ScopeType): Promise<ScopeTarget> {
     this.outputChannel.appendLine(`[ScopeAnalyzer] Analyzing ${scopeType} scope`);
 
     try {
@@ -114,7 +111,7 @@ export class ScopeAnalyzer {
       if (error instanceof ScopeDetectionError) {
         throw error;
       }
-      
+
       // Wrap unexpected errors
       throw new ScopeDetectionError(
         ScopeErrorCategory.PARSE_ERROR,
@@ -127,20 +124,13 @@ export class ScopeAnalyzer {
   /**
    * Analyze function-level scope (function at cursor position)
    */
-  private async analyzeFunctionScope(
-    editor: vscode.TextEditor
-  ): Promise<ScopeTarget> {
+  private async analyzeFunctionScope(editor: vscode.TextEditor): Promise<ScopeTarget> {
     const position = editor.selection.active;
     const document = editor.document;
 
-    this.outputChannel.appendLine(
-      `[ScopeAnalyzer] Finding function at line ${position.line + 1}`
-    );
+    this.outputChannel.appendLine(`[ScopeAnalyzer] Finding function at line ${position.line + 1}`);
 
-    const hydroFunction = await this.findHydroFunctionAtPosition(
-      document,
-      position
-    );
+    const hydroFunction = await this.findHydroFunctionAtPosition(document, position);
 
     if (!hydroFunction) {
       throw new ScopeDetectionError(
@@ -159,9 +149,7 @@ export class ScopeAnalyzer {
       );
     }
 
-    this.outputChannel.appendLine(
-      `[ScopeAnalyzer] Found function: ${hydroFunction.name}`
-    );
+    this.outputChannel.appendLine(`[ScopeAnalyzer] Found function: ${hydroFunction.name}`);
 
     // Find Cargo.toml for this file
     const cargoTomlPath = await this.findCargoToml(workspaceFolder.uri.fsPath, document.fileName);
@@ -185,12 +173,8 @@ export class ScopeAnalyzer {
   /**
    * Analyze file-level scope (all Hydro functions in file)
    */
-  private async analyzeFileScope(
-    document: vscode.TextDocument
-  ): Promise<ScopeTarget> {
-    this.outputChannel.appendLine(
-      `[ScopeAnalyzer] Analyzing file: ${document.fileName}`
-    );
+  private async analyzeFileScope(document: vscode.TextDocument): Promise<ScopeTarget> {
+    this.outputChannel.appendLine(`[ScopeAnalyzer] Analyzing file: ${document.fileName}`);
 
     const functions = await this.findAllHydroFunctionsInFile(document);
 
@@ -211,9 +195,7 @@ export class ScopeAnalyzer {
       );
     }
 
-    this.outputChannel.appendLine(
-      `[ScopeAnalyzer] Found ${functions.length} Hydro function(s)`
-    );
+    this.outputChannel.appendLine(`[ScopeAnalyzer] Found ${functions.length} Hydro function(s)`);
 
     // Find Cargo.toml for this file
     const cargoTomlPath = await this.findCargoToml(workspaceFolder.uri.fsPath, document.fileName);
@@ -239,7 +221,7 @@ export class ScopeAnalyzer {
    */
   private async analyzeWorkspaceScope(): Promise<ScopeTarget> {
     const workspaceFolders = vscode.workspace.workspaceFolders;
-    
+
     if (!workspaceFolders || workspaceFolders.length === 0) {
       throw new ScopeDetectionError(
         ScopeErrorCategory.NOT_IN_WORKSPACE,
@@ -248,9 +230,7 @@ export class ScopeAnalyzer {
     }
 
     const workspaceRoot = workspaceFolders[0].uri.fsPath;
-    this.outputChannel.appendLine(
-      `[ScopeAnalyzer] Scanning workspace: ${workspaceRoot}`
-    );
+    this.outputChannel.appendLine(`[ScopeAnalyzer] Scanning workspace: ${workspaceRoot}`);
 
     // Find Cargo.toml to confirm this is a Rust workspace
     const cargoTomlPath = await this.findCargoToml(workspaceRoot);
@@ -262,15 +242,11 @@ export class ScopeAnalyzer {
       );
     }
 
-    this.outputChannel.appendLine(
-      `[ScopeAnalyzer] Found Cargo.toml at: ${cargoTomlPath}`
-    );
+    this.outputChannel.appendLine(`[ScopeAnalyzer] Found Cargo.toml at: ${cargoTomlPath}`);
 
     // Find all Rust files in workspace
     const rustFiles = await this.findRustFilesInWorkspace(workspaceRoot);
-    this.outputChannel.appendLine(
-      `[ScopeAnalyzer] Found ${rustFiles.length} Rust file(s)`
-    );
+    this.outputChannel.appendLine(`[ScopeAnalyzer] Found ${rustFiles.length} Rust file(s)`);
 
     // Collect all Hydro functions from all files
     const allFunctions: HydroFunction[] = [];
@@ -350,8 +326,8 @@ export class ScopeAnalyzer {
     const allFunctions = this.parseFunctionsInText(text, document.fileName);
 
     // Filter to only Hydro functions and exclude test functions
-    const hydroFunctions = allFunctions.filter((func) =>
-      this.isHydroFunction(func, text) && !this.isInTestModule(func, text)
+    const hydroFunctions = allFunctions.filter(
+      (func) => this.isHydroFunction(func, text) && !this.isInTestModule(func, text)
     );
 
     this.outputChannel.appendLine(
@@ -373,9 +349,7 @@ export class ScopeAnalyzer {
       const cargoTomlPath = path.join(currentDir, 'Cargo.toml');
       try {
         await fs.access(cargoTomlPath);
-        this.outputChannel.appendLine(
-          `[ScopeAnalyzer] Found Cargo.toml at ${cargoTomlPath}`
-        );
+        this.outputChannel.appendLine(`[ScopeAnalyzer] Found Cargo.toml at ${cargoTomlPath}`);
         return cargoTomlPath;
       } catch {
         // Move up one directory
@@ -392,15 +366,13 @@ export class ScopeAnalyzer {
 
   /**
    * Find Cargo.toml in workspace
-   * 
+   *
    * Searches for Cargo.toml starting from workspace root and checking subdirectories.
    * This handles both single-crate projects and workspace projects.
    */
   private async findCargoToml(workspaceRoot: string, filePath?: string): Promise<string | null> {
-    this.outputChannel.appendLine(
-      `[ScopeAnalyzer] Searching for Cargo.toml in ${workspaceRoot}`
-    );
-    
+    this.outputChannel.appendLine(`[ScopeAnalyzer] Searching for Cargo.toml in ${workspaceRoot}`);
+
     // If we have a file path, try walking up from it first
     if (filePath) {
       const cargoToml = await this.findCargoTomlFromFile(filePath);
@@ -408,33 +380,25 @@ export class ScopeAnalyzer {
         return cargoToml;
       }
     }
-    
+
     // Check workspace root first
     const rootCargoToml = path.join(workspaceRoot, 'Cargo.toml');
     try {
       await fs.access(rootCargoToml);
-      this.outputChannel.appendLine(
-        `[ScopeAnalyzer] Found Cargo.toml at workspace root`
-      );
+      this.outputChannel.appendLine(`[ScopeAnalyzer] Found Cargo.toml at workspace root`);
       return rootCargoToml;
     } catch {
       // Not in root, search subdirectories
     }
 
     // Search common locations for Cargo.toml
-    const commonPaths = [
-      'hydro/Cargo.toml',
-      'rust/Cargo.toml',
-      'src/Cargo.toml',
-    ];
+    const commonPaths = ['hydro/Cargo.toml', 'rust/Cargo.toml', 'src/Cargo.toml'];
 
     for (const relativePath of commonPaths) {
       const cargoTomlPath = path.join(workspaceRoot, relativePath);
       try {
         await fs.access(cargoTomlPath);
-        this.outputChannel.appendLine(
-          `[ScopeAnalyzer] Found Cargo.toml at ${relativePath}`
-        );
+        this.outputChannel.appendLine(`[ScopeAnalyzer] Found Cargo.toml at ${relativePath}`);
         return cargoTomlPath;
       } catch {
         // Continue searching
@@ -444,19 +408,13 @@ export class ScopeAnalyzer {
     // If not found in common locations, do a shallow search
     try {
       const entries = await fs.readdir(workspaceRoot, { withFileTypes: true });
-      
+
       for (const entry of entries) {
         if (entry.isDirectory() && !entry.name.startsWith('.')) {
-          const cargoTomlPath = path.join(
-            workspaceRoot,
-            entry.name,
-            'Cargo.toml'
-          );
+          const cargoTomlPath = path.join(workspaceRoot, entry.name, 'Cargo.toml');
           try {
             await fs.access(cargoTomlPath);
-            this.outputChannel.appendLine(
-              `[ScopeAnalyzer] Found Cargo.toml in ${entry.name}/`
-            );
+            this.outputChannel.appendLine(`[ScopeAnalyzer] Found Cargo.toml in ${entry.name}/`);
             return cargoTomlPath;
           } catch {
             // Continue searching
@@ -464,29 +422,21 @@ export class ScopeAnalyzer {
         }
       }
     } catch (error) {
-      this.outputChannel.appendLine(
-        `[ScopeAnalyzer] Error searching for Cargo.toml: ${error}`
-      );
+      this.outputChannel.appendLine(`[ScopeAnalyzer] Error searching for Cargo.toml: ${error}`);
     }
 
-    this.outputChannel.appendLine(
-      '[ScopeAnalyzer] No Cargo.toml found in workspace'
-    );
+    this.outputChannel.appendLine('[ScopeAnalyzer] No Cargo.toml found in workspace');
     return null;
   }
 
   /**
    * Find all Rust files in workspace
-   * 
+   *
    * Recursively searches for .rs files, excluding common directories like
    * target/, node_modules/, and hidden directories.
    */
-  private async findRustFilesInWorkspace(
-    workspaceRoot: string
-  ): Promise<string[]> {
-    this.outputChannel.appendLine(
-      `[ScopeAnalyzer] Searching for Rust files in ${workspaceRoot}`
-    );
+  private async findRustFilesInWorkspace(workspaceRoot: string): Promise<string[]> {
+    this.outputChannel.appendLine(`[ScopeAnalyzer] Searching for Rust files in ${workspaceRoot}`);
 
     const rustFiles: string[] = [];
     const excludeDirs = new Set([
@@ -538,9 +488,7 @@ export class ScopeAnalyzer {
     // Start scanning from workspace root
     await scanDirectory(workspaceRoot);
 
-    this.outputChannel.appendLine(
-      `[ScopeAnalyzer] Found ${rustFiles.length} Rust file(s)`
-    );
+    this.outputChannel.appendLine(`[ScopeAnalyzer] Found ${rustFiles.length} Rust file(s)`);
 
     return rustFiles;
   }
@@ -552,7 +500,7 @@ export class ScopeAnalyzer {
   protected async readFileContent(filePath: string): Promise<string> {
     try {
       const stats = await fs.stat(filePath);
-      
+
       if (stats.size > this.config.maxFileSize) {
         throw new ScopeDetectionError(
           ScopeErrorCategory.IO_ERROR,
@@ -566,27 +514,13 @@ export class ScopeAnalyzer {
       if (error instanceof ScopeDetectionError) {
         throw error;
       }
-      
+
       throw new ScopeDetectionError(
         ScopeErrorCategory.IO_ERROR,
         `Failed to read file: ${error}`,
         filePath
       );
     }
-  }
-
-  /**
-   * Check if text contains Hydro imports
-   */
-  private hasHydroImports(text: string): boolean {
-    return HYDRO_PATTERNS.hydroImport.test(text);
-  }
-
-  /**
-   * Check if text contains Hydro attributes
-   */
-  private hasHydroAttributes(text: string): boolean {
-    return HYDRO_PATTERNS.attribute.test(text);
   }
 
   /**
@@ -597,163 +531,27 @@ export class ScopeAnalyzer {
   }
 
   /**
-   * Quick check if file likely contains Hydro code
-   */
-  async isLikelyHydroFile(document: vscode.TextDocument): Promise<boolean> {
-    const text = document.getText();
-    return (
-      this.hasHydroImports(text) ||
-      this.hasHydroAttributes(text) ||
-      this.hasHydroMacros(text)
-    );
-  }
-
-  /**
    * Parse all functions in text and return their metadata using tree-sitter
    */
-  private parseFunctionsInText(
-    text: string,
-    filePath: string
-  ): ParsedFunction[] {
-    // Try tree-sitter first if available
-    if (this.rustParser) {
-      try {
-        const rustFunctions = this.rustParser.parseFunctions(text);
-        const modulePath = this.extractModulePath(filePath);
-
-        return rustFunctions.map((rustFunc) => ({
-          name: rustFunc.name,
-          modulePath,
-          filePath,
-          startLine: rustFunc.startLine,
-          endLine: rustFunc.endLine,
-          attributes: rustFunc.attributes,
-          usesMacro: this.hasHydroMacros(rustFunc.body),
-          returnType: rustFunc.returnType,
-        }));
-      } catch (error) {
-        this.outputChannel.appendLine(
-          `[ScopeAnalyzer] Error parsing with tree-sitter: ${error}, falling back to regex`
-        );
-      }
-    }
-    
-    // Fallback to regex-based parsing
-    return this.parseFunctionsInTextLegacy(text, filePath);
-  }
-
-  /**
-   * Legacy regex-based parsing (fallback)
-   */
-  private parseFunctionsInTextLegacy(
-    text: string,
-    filePath: string
-  ): ParsedFunction[] {
-    const functions: ParsedFunction[] = [];
-    const lines = text.split('\n');
-
-    // Track brace depth to find function boundaries
-    let currentFunction: Partial<ParsedFunction> | null = null;
-    let braceDepth = 0;
-    let functionBraceDepth = 0;
-    let attributes: string[] = [];
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const trimmedLine = line.trim();
-
-      // Track attributes (lines starting with #[...])
-      if (trimmedLine.startsWith('#[')) {
-        const attrMatch = trimmedLine.match(/#\[([^\]]+)\]/);
-        if (attrMatch) {
-          attributes.push(attrMatch[1]);
-        }
-        continue;
-      }
-
-      // Skip comments and empty lines
-      if (
-        trimmedLine.startsWith('//') ||
-        trimmedLine.startsWith('/*') ||
-        trimmedLine.length === 0
-      ) {
-        continue;
-      }
-
-      // Look for function definitions
-      if (!currentFunction) {
-        // Match function start (may be multiline)
-        const funcMatch = line.match(
-          /^\s*(pub\s+)?(?:async\s+)?fn\s+(\w+)\s*(?:<[^>]*>)?/
-        );
-
-        if (funcMatch) {
-          const name = funcMatch[2];
-          
-          // Collect the full signature (may span multiple lines)
-          const signatureLines = [line];
-          let j = i + 1;
-          let foundOpenBrace = line.includes('{');
-          
-          // Keep collecting lines until we find the opening brace
-          while (j < lines.length && !foundOpenBrace) {
-            signatureLines.push(lines[j]);
-            if (lines[j].includes('{')) {
-              foundOpenBrace = true;
-            }
-            j++;
-          }
-          
-          const fullSignature = signatureLines.join(' ');
-          
-          // Extract return type from full signature
-          const returnTypeMatch = fullSignature.match(/->\s*([^{]+)/);
-          const returnType = returnTypeMatch ? returnTypeMatch[1].trim() : undefined;
-
-          currentFunction = {
-            name,
-            modulePath: '', // Will be set later
-            filePath,
-            startLine: i,
-            endLine: i,
-            attributes: [...attributes],
-            usesMacro: false,
-            returnType,
-          };
-
-          functionBraceDepth = braceDepth;
-          attributes = []; // Reset attributes for next function
-        }
-      }
-
-      // Track brace depth
-      for (const char of line) {
-        if (char === '{') {
-          braceDepth++;
-        } else if (char === '}') {
-          braceDepth--;
-
-          // Check if we've closed the current function
-          if (currentFunction && braceDepth === functionBraceDepth) {
-            currentFunction.endLine = i;
-
-            // Complete the function metadata
-            const modulePath = this.extractModulePath(filePath);
-            currentFunction.modulePath = modulePath;
-
-            functions.push(currentFunction as ParsedFunction);
-            currentFunction = null;
-          }
-        }
-      }
-
-      // Check for macro usage in function body
-      if (currentFunction && this.hasHydroMacros(line)) {
-        currentFunction.usesMacro = true;
-      }
+  private parseFunctionsInText(text: string, filePath: string): ParsedFunction[] {
+    // Use tree-sitter parser
+    if (!this.rustParser) {
+      throw new Error('Tree-sitter parser not initialized');
     }
 
-    return functions;
+    const rustFunctions = this.rustParser.parseFunctions(text);
+    const modulePath = this.extractModulePath(filePath);
+
+    return rustFunctions.map((rustFunc) => ({
+      name: rustFunc.name,
+      modulePath,
+      filePath,
+      startLine: rustFunc.startLine,
+      endLine: rustFunc.endLine,
+      attributes: rustFunc.attributes,
+      usesMacro: this.hasHydroMacros(rustFunc.body),
+      returnType: rustFunc.returnType,
+    }));
   }
 
   /**
@@ -770,17 +568,13 @@ export class ScopeAnalyzer {
     );
 
     if (hasHydroAttribute) {
-      this.outputChannel.appendLine(
-        `[ScopeAnalyzer] Function ${func.name} has Hydro attribute`
-      );
+      this.outputChannel.appendLine(`[ScopeAnalyzer] Function ${func.name} has Hydro attribute`);
       return true;
     }
 
     // Check 2: Uses Hydro macros (hydro_lang::flow!, etc.)
     if (func.usesMacro) {
-      this.outputChannel.appendLine(
-        `[ScopeAnalyzer] Function ${func.name} uses Hydro macro`
-      );
+      this.outputChannel.appendLine(`[ScopeAnalyzer] Function ${func.name} uses Hydro macro`);
       return true;
     }
 
@@ -805,9 +599,7 @@ export class ScopeAnalyzer {
 
     // Get function signature and body for pattern matching
     const lines = fullText.split('\n');
-    const functionBody = lines
-      .slice(func.startLine, func.endLine + 1)
-      .join('\n');
+    const functionBody = lines.slice(func.startLine, func.endLine + 1).join('\n');
 
     // Check 4: Has FlowBuilder parameter (check entire function, not just first line)
     if (HYDRO_PATTERNS.flowBuilderParam.test(functionBody)) {
@@ -858,55 +650,55 @@ export class ScopeAnalyzer {
         attr.includes('#[tokio::test]') ||
         attr.includes('#[async_std::test]')
     );
-    
+
     if (hasTestAttribute) {
       this.outputChannel.appendLine(
         `[ScopeAnalyzer] Function ${func.name} has test attribute, skipping`
       );
       return true;
     }
-    
+
     // Check 2: Look backwards from the function start to find if it's in a test module
     const lines = fullText.split('\n');
     let braceDepth = 0;
     let inTestModule = false;
-    
+
     // Start from the line before the function
     for (let i = func.startLine - 1; i >= 0; i--) {
       const line = lines[i];
       const trimmed = line.trim();
-      
+
       // Check for #[cfg(test)] attribute BEFORE counting braces
       if (trimmed.includes('#[cfg(test)]')) {
         inTestModule = true;
         break;
       }
-      
+
       // Check for mod tests { pattern
       if (trimmed.match(/mod\s+tests\s*{/) || trimmed.match(/mod\s+test\s*{/)) {
         inTestModule = true;
         break;
       }
-      
+
       // Count braces to track scope depth
       // Going backwards: closing braces mean we're going deeper into parent scope
       const closingBraces = (line.match(/}/g) || []).length;
       const openingBraces = (line.match(/{/g) || []).length;
       braceDepth += closingBraces - openingBraces;
-      
+
       // If we've exited the immediate parent scope, stop looking
       // We need to check at least one level up to find the module declaration
       if (braceDepth < -1) {
         break;
       }
     }
-    
+
     if (inTestModule) {
       this.outputChannel.appendLine(
         `[ScopeAnalyzer] Function ${func.name} is in test module, skipping`
       );
     }
-    
+
     return inTestModule;
   }
 
@@ -916,7 +708,7 @@ export class ScopeAnalyzer {
   private extractModulePath(filePath: string): string {
     // Extract the module path from the file path
     // For example: /path/to/project/src/module/submodule.rs -> module::submodule
-    
+
     const parts = filePath.split(path.sep);
     const srcIndex = parts.findIndex((p) => p === 'src');
 

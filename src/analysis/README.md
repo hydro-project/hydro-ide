@@ -10,13 +10,17 @@ This directory contains the analysis engine for Hydro operator recognition in th
 ## Operator Categories
 
 ### Networking Operators
+
 Essential operators for distributed communication between Hydro locations (processes, clusters):
+
 - `send_bincode`, `recv_bincode`, `broadcast_bincode`, `demux_bincode`
 - `send_bytes`, `recv_bytes`, `broadcast_bytes`, `demux_bytes`
 - External communication: `send_bincode_external`, `recv_bincode_external`
 
 ### Core Dataflow Operators
+
 Standard operators for transforming and processing data streams:
+
 - **Transform**: `map`, `filter`, `flat_map`, `scan`, `enumerate`
 - **Aggregate**: `fold`, `reduce`, `fold_keyed`, `reduce_keyed`
 - **Join**: `join`, `cross_product`, `difference`, `anti_join`
@@ -25,20 +29,25 @@ Standard operators for transforming and processing data streams:
 - **Sinks**: `for_each`, `dest_sink`, `assert`
 
 ### Collection Types
+
 Valid Hydro collection return types:
+
 - `Stream<`, `Singleton<`, `Optional<`
 - `KeyedStream<`, `KeyedSingleton<`
 
 ## Updating the Configuration
 
 ### Manual Updates
+
 Update the operator lists in VS Code settings:
+
 1. Go to File > Preferences > Settings
 2. Search for "Hydro IDE"
 3. Expand the "Operators" section
 4. Modify the operator lists as needed
 
 Or edit your `settings.json` directly:
+
 ```json
 {
   "hydroIde.operators.networkingOperators": ["send_bincode", "broadcast_bincode", ...],
@@ -46,14 +55,9 @@ Or edit your `settings.json` directly:
 }
 ```
 
-### Automated Scanning
-Use the utility script to scan the Hydro codebase for operators:
+### Updating Operator Lists
 
-```bash
-node scripts/updateOperators.js /path/to/hydro/repo
-```
-
-This will scan the Hydro source code and suggest updates to the VS Code settings.
+When Hydro adds new operators, update the operator lists in `package.json` under the `hydroIde.operators.*` configuration. Use an LLM or manual inspection of the Hydro codebase to identify new operators and their categories (networking, core dataflow, sink).
 
 ## How It Works
 
@@ -66,7 +70,9 @@ The LSP graph extractor loads operator configuration from VS Code settings and u
 This hybrid approach ensures that essential Hydro operators are recognized even when LSP provides incomplete type information, while still filtering out non-dataflow infrastructure code.
 
 ### Hot-Swappable Configuration
+
 The configuration is loaded from VS Code settings, making it hot-swappable in the field:
+
 - Changes take effect immediately without restarting VS Code
 - Users can customize operator lists for their specific Hydro version
 - Teams can share workspace settings with project-specific operator configurations

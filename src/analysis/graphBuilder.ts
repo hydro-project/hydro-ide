@@ -23,40 +23,17 @@ import * as vscode from 'vscode';
 import { TreeSitterRustParser, OperatorNode as TreeSitterOperatorNode } from './treeSitterParser';
 import { OperatorRegistry } from './operatorRegistry';
 import type { LocationInfo } from './locationAnalyzer';
-import type { NodeType } from './lspGraphExtractor';
+import type { GraphNode, GraphEdge } from '../core/graphTypes';
 
 /**
  * Graph node representing an operator
  */
-export interface Node {
-  id: string;
-  nodeType: NodeType;
-  shortLabel: string;
-  fullLabel: string;
-  label: string;
-  data: {
-    locationId: number | null;
-    locationType: string | null;
-    locationKind?: string;
-    tickVariable?: string;
-    backtrace: [];
-    treeSitterPosition?: {
-      line: number;
-      column: number;
-    };
-  };
-}
+export type Node = GraphNode;
 
 /**
  * Graph edge connecting two operators
  */
-export interface Edge {
-  id: string;
-  source: string;
-  target: string;
-  semanticTags: string[];
-  label?: string;
-}
+export type Edge = GraphEdge;
 
 /**
  * Result of graph building

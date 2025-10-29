@@ -1,9 +1,37 @@
 /**
- * LSP Graph Extractor
+ * LSP Graph Extractor - Fast Hydroscope Visualization Generator
  *
- * Extracts Hydroscope JSON visualizations directly from rust-analyzer's LSP
- * without requiring Cargo compilation. Provides instant visualization feedback
- * during development.
+ * **Purpose:** Generate complete Hydroscope JSON visualization without Cargo compilation.
+ * 
+ * **Not related to location colorization:** This is separate from locationAnalyzer/GraphExtractor
+ * (which colorize location types in the editor). This class generates full graph visualizations.
+ * 
+ * **Architecture:**
+ * This is the "fast path" for visualization — uses tree-sitter for operator structure
+ * with optional LSP enhancement for type information. Produces the same Hydroscope JSON
+ * format as the Cargo-based path, but without runtime backtraces.
+ * 
+ * **Services used:**
+ * - TreeSitterRustParser: Parse Rust AST, find operator chains
+ * - GraphBuilder: Create nodes and edges from operators  
+ * - EdgeAnalyzer: Add network semantic tags to edges
+ * - HierarchyBuilder: Build location + code hierarchies
+ * - OperatorRegistry: Classify operators by type
+ * 
+ * **Output:** Complete HydroscopeJson ready for rendering
+ * 
+ * **Advantages:**
+ * - ⚡ Fast (1-2 seconds, no compilation)
+ * - 🔄 Instant feedback during development
+ * - 💾 Cached for subsequent visualizations
+ * 
+ * **Trade-offs:**
+ * - No runtime backtraces (hierarchy based on types, not execution)
+ * - LSP enhancement is best-effort (may not have complete type info)
+ * 
+ * @see CargoOrchestrator for the complete visualization path (with runtime info)
+ * @see locationAnalyzer.ts for location colorization (different feature)
+ * @see ARCHITECTURE.md for complete system architecture
  */
 
 import * as vscode from 'vscode';
@@ -16,74 +44,27 @@ import { GraphBuilder } from './graphBuilder';
 import { OperatorRegistry } from './operatorRegistry';
 import { EdgeAnalyzer } from './edgeAnalyzer';
 import { HierarchyBuilder } from './hierarchyBuilder';
+import type {
+  GraphNode,
+  GraphEdge,
+  HydroscopeJson as CoreHydroscopeJson,
+  Hierarchy as CoreHierarchy,
+  HierarchyContainer as CoreHierarchyContainer,
+  NodeType,
+  EdgeStyleConfig,
+  NodeTypeConfig,
+  Legend,
+} from '../core/graphTypes';
 
-/**
- * Hydroscope JSON format interfaces
- */
+// Re-export aliases to maintain existing public API for tests and other modules
+export type Node = GraphNode;
+export type Edge = GraphEdge;
+export type HydroscopeJson = CoreHydroscopeJson;
+export type Hierarchy = CoreHierarchy;
+export type HierarchyContainer = CoreHierarchyContainer;
+export type { NodeType, EdgeStyleConfig, NodeTypeConfig, Legend };
 
-export interface Node {
-  id: string;
-  nodeType: NodeType;
-  shortLabel: string;
-  fullLabel: string;
-  label: string;
-  data: {
-    locationId: number | null;
-    locationType: string | null;
-    locationKind?: string; // Original location kind (e.g., "Process<Leader>")
-    tickVariable?: string; // Tick variable name for temporal operators (e.g., "ticker")
-    backtrace: [];
-    treeSitterPosition?: {
-      line: number;
-      column: number;
-    };
-  };
-}
-
-export interface Edge {
-  id: string;
-  source: string;
-  target: string;
-  semanticTags: string[];
-  label?: string;
-}
-
-export interface HierarchyContainer {
-  id: string;
-  name: string;
-  children: HierarchyContainer[];
-}
-
-export interface Hierarchy {
-  id: string;
-  name: string;
-  children: HierarchyContainer[];
-}
-
-export interface HydroscopeJson {
-  nodes: Node[];
-  edges: Edge[];
-  hierarchyChoices: Hierarchy[];
-  nodeAssignments: Record<string, Record<string, string>>;
-  selectedHierarchy?: string;
-  edgeStyleConfig: EdgeStyleConfig;
-  nodeTypeConfig: NodeTypeConfig;
-  legend: Legend;
-}
-
-export type NodeType = 'Source' | 'Transform' | 'Sink' | 'Join' | 'Network' | 'Tee' | 'Aggregation';
-
-export interface EdgeStyleConfig {
-  [key: string]: unknown;
-}
-
-export interface NodeTypeConfig {
-  [key: string]: unknown;
-}
-
-export interface Legend {
-  [key: string]: unknown;
-}
+// Types are defined in src/core/graphTypes.ts and re-exported above to avoid drift.
 
 /**
  * Cache entry for storing extracted graphs
@@ -721,370 +702,6 @@ export class LSPGraphExtractor {
     this.log(`Built ${chains.length} operator chains using variable binding graph`);
     return chains;
   }
-
-
-  /**
-   * NOTE: buildLocationAndCodeHierarchies, countTickDepth, buildTickLabel, and extractLocationLabel
-   * methods have been moved to HierarchyBuilder service
-   */
-
-  /**
-   * Infer node type from operator name (PLACEHOLDER - moved to service)
-    // Build nested Tick hierarchy: base location (e.g., Worker), with children
-    // Tick<Worker>, Tick<Tick<Worker>>, etc. Assign each node to the deepest
-    // matching container based on the Tick depth present in its locationKind.
-
-    const nodeAssignments: Record<string, string> = {};
-    let containerIdCounter = 0;
-
-    // Build adjacency for all nodes using edges (undirected for connectivity)
-    const adjacency = new Map<string, Set<string>>();
-    const addEdge = (a: string, b: string) => {
-      if (!adjacency.has(a)) adjacency.set(a, new Set());
-      if (!adjacency.has(b)) adjacency.set(b, new Set());
-      adjacency.get(a)!.add(b);
-      adjacency.get(b)!.add(a);
-    };
-    for (const e of edges) {
-      addEdge(e.source, e.target);
-    }
-
-    // Precompute base label and tick depth for each node
-    interface LocMeta {
-      base: string;
-      depth: number;
-      kind: string | null;
-    }
-    const metaById = new Map<string, LocMeta>();
-    const nodesByBase = new Map<string, Node[]>();
-    const unknownNodes: Node[] = [];
-    for (const n of nodes) {
-      const kind = n.data.locationKind || null;
-      if (!kind) {
-        unknownNodes.push(n);
-        continue;
-      }
-      const base = this.extractLocationLabel(kind);
-      const depth = this.countTickDepth(kind);
-      metaById.set(n.id, { base, depth, kind });
-      if (!nodesByBase.has(base)) nodesByBase.set(base, []);
-      nodesByBase.get(base)!.push(n);
-    }
-
-    // Build base location roots
-    const rootsByLabel = new Map<string, HierarchyContainer>();
-    const children: HierarchyContainer[] = [];
-    for (const [base, baseNodes] of nodesByBase.entries()) {
-      const root: HierarchyContainer = {
-        id: `loc_${containerIdCounter++}`,
-        name: base,
-        children: [],
-      };
-      rootsByLabel.set(base, root);
-      children.push(root);
-
-      // Determine max depth present for this base
-      let maxDepth = 0;
-      for (const n of baseNodes) {
-        const m = metaById.get(n.id)!;
-        if (m.depth > maxDepth) maxDepth = m.depth;
-      }
-
-      // Mapping node -> container at previous level (for parenting)
-      const parentAtLevel = new Map<number, Map<string, string>>();
-
-      // Level 1..maxDepth: split by tick variable (not connected components!)
-      // Nodes at the same tick level share a container if they use the same tick variable
-      for (let level = 1; level <= maxDepth; level++) {
-        const nodesAtLevel = new Map<string, string[]>(); // tick variable -> node IDs
-
-        for (const n of baseNodes) {
-          const m = metaById.get(n.id)!;
-          if (m.depth >= level) {
-            // Group by tick variable
-            const tickVar = n.data.tickVariable || '_unknown_'; // Fallback for nodes without tick variable
-            if (!nodesAtLevel.has(tickVar)) {
-              nodesAtLevel.set(tickVar, []);
-            }
-            nodesAtLevel.get(tickVar)!.push(n.id);
-          }
-        }
-
-        if (nodesAtLevel.size === 0) continue;
-
-        const mapThisLevel = new Map<string, string>();
-
-        // Create a container for each tick variable group
-        for (const [tickVar, nodeIds] of nodesAtLevel.entries()) {
-          // Determine parent container for this tick group
-          let parentContainer: HierarchyContainer = root;
-          if (level > 1) {
-            const parentMap = parentAtLevel.get(level - 1)!;
-            // Pick the first node's parent (tick groups shouldn't cross parents)
-            for (const nid of nodeIds) {
-              const pid = parentMap.get(nid);
-              if (pid) {
-                // Find the actual container reference by walking tree (small N, so simple search)
-                const stack: HierarchyContainer[] = [root];
-                while (stack.length) {
-                  const c = stack.pop()!;
-                  if (c.id === pid) {
-                    parentContainer = c;
-                    break;
-                  }
-                  for (const ch of c.children) stack.push(ch);
-                }
-                break;
-              }
-            }
-          }
-
-          // Use tick variable name for container label if available
-          // Strip function scope prefix for display (e.g., "main::ticker" -> "ticker")
-          let tickLabel: string;
-          if (tickVar !== '_unknown_') {
-            const parts = tickVar.split('::');
-            tickLabel = parts.length > 1 ? parts[parts.length - 1] : tickVar;
-          } else {
-            tickLabel = this.buildTickLabel(base, level);
-          }
-
-          const cont: HierarchyContainer = {
-            id: `loc_${containerIdCounter++}`,
-            name: tickLabel,
-            children: [],
-          };
-          parentContainer.children.push(cont);
-
-          // Record parent for nodes in this tick scope
-          for (const nid of nodeIds) {
-            mapThisLevel.set(nid, cont.id);
-          }
-        }
-
-        parentAtLevel.set(level, mapThisLevel);
-      }
-
-      // Assign nodes to deepest level container matching their depth
-      for (const n of baseNodes) {
-        const m = metaById.get(n.id)!;
-        if (m.depth === 0) {
-          nodeAssignments[n.id] = root.id;
-        } else {
-          const mapForDepth = parentAtLevel.get(m.depth);
-          if (mapForDepth && mapForDepth.get(n.id)) {
-            nodeAssignments[n.id] = mapForDepth.get(n.id)!;
-          } else {
-            // Fallback: assign to root if no mapping found (shouldn't happen)
-            nodeAssignments[n.id] = root.id;
-          }
-        }
-      }
-    }
-
-    // Collect top-level children
-    // children already collected during roots build
-
-    // Handle nodes without location information (assign to default container)
-    // This addresses requirement 3.5 and degraded mode requirement 6.4
-    const unassignedNodes = nodes.filter((node) => !(node.id in nodeAssignments));
-    if (unassignedNodes.length > 0) {
-      const defaultContainerId = `loc_${containerIdCounter++}`;
-      children.push({ id: defaultContainerId, name: '(unknown location)', children: [] });
-      for (const node of unassignedNodes) nodeAssignments[node.id] = defaultContainerId;
-
-      this.log(
-        `DEGRADED MODE: Created default container '${defaultContainerId}' for ${unassignedNodes.length} unassigned nodes`
-      );
-    }
-
-    // Ensure we have at least one container (even if empty)
-    if (children.length === 0) {
-      const fallbackContainerId = 'loc_0';
-      children.push({
-        id: fallbackContainerId,
-        name: '(default)',
-        children: [],
-      });
-      this.log('DEGRADED MODE: Created fallback container as no location groups were found');
-    }
-
-    // Build the complete hierarchy structure
-    // Build Code hierarchy: file -> function -> variable
-    const codeChildren: HierarchyContainer[] = [];
-    const codeAssignments: Record<string, string> = {};
-    let codeIdCounter = containerIdCounter;
-
-    const fileLabel = path.basename(document.fileName);
-    const fileContainer: HierarchyContainer = {
-      id: `code_${codeIdCounter++}`,
-      name: fileLabel,
-      children: [],
-    };
-    codeChildren.push(fileContainer);
-
-    // Helper maps (do not push children yet; finalize after we know which have nodes)
-    const functionMap = new Map<string, HierarchyContainer>();
-    const variableMap = new Map<string, HierarchyContainer>();
-    const containerAssignmentCount: Record<string, number> = {};
-
-    const bumpCount = (id: string) => {
-      containerAssignmentCount[id] = (containerAssignmentCount[id] || 0) + 1;
-    };
-
-    const getFunctionContainer = (fnNameRaw: string): HierarchyContainer => {
-      const fnName = `fn ${fnNameRaw}`; // label functions distinctly
-      if (functionMap.has(fnName)) return functionMap.get(fnName)!;
-      const fnContainer: HierarchyContainer = {
-        id: `code_${codeIdCounter++}`,
-        name: fnName,
-        children: [],
-      };
-      functionMap.set(fnName, fnContainer);
-      return fnContainer;
-    };
-
-    const getVariableContainer = (
-      fnContainer: HierarchyContainer,
-      varName: string
-    ): HierarchyContainer => {
-      const key = `${fnContainer.id}:${varName}`;
-      if (variableMap.has(key)) return variableMap.get(key)!;
-      const varContainer: HierarchyContainer = {
-        id: `code_${codeIdCounter++}`,
-        name: varName,
-        children: [],
-      };
-      variableMap.set(key, varContainer);
-      return varContainer;
-    };
-
-    // Build mapping from tree-sitter positions to node IDs for assignment
-    const nodeByPos = new Map<string, Node>();
-    for (const n of nodes) {
-      const pos = n.data.treeSitterPosition;
-      if (pos) nodeByPos.set(`${pos.line}:${pos.column}:${n.shortLabel}`, n);
-    }
-
-    // Variable chains → assign operator nodes into variable containers
-    const varChains = this.treeSitterParser.parseVariableBindings(document);
-    for (const binding of varChains) {
-      const fnName =
-        this.treeSitterParser.findEnclosingFunctionName(document, binding.line) || '(top-level)';
-      const fnContainer = getFunctionContainer(fnName);
-      const varContainer = getVariableContainer(fnContainer, binding.varName);
-
-      for (const op of binding.operators) {
-        const node = nodeByPos.get(`${op.line}:${op.column}:${op.name}`);
-        if (node) {
-          codeAssignments[node.id] = varContainer.id;
-          bumpCount(varContainer.id);
-        }
-      }
-    }
-
-    // Standalone chains → assign operator nodes directly to function containers
-    const standaloneChains = this.treeSitterParser.parseStandaloneChains(document);
-    for (const chain of standaloneChains) {
-      if (chain.length === 0) continue;
-      const fnName =
-        this.treeSitterParser.findEnclosingFunctionName(document, chain[0].line) || '(top-level)';
-      const fnContainer = getFunctionContainer(fnName);
-      for (const op of chain) {
-        const node = nodeByPos.get(`${op.line}:${op.column}:${op.name}`);
-        if (node && !(node.id in codeAssignments)) {
-          codeAssignments[node.id] = fnContainer.id;
-          bumpCount(fnContainer.id);
-        }
-      }
-    }
-
-    // Any remaining nodes without code assignment → put under file container
-    for (const n of nodes) {
-      if (!(n.id in codeAssignments)) {
-        codeAssignments[n.id] = fileContainer.id;
-        bumpCount(fileContainer.id);
-      }
-    }
-
-    // Finalize hierarchy: add only containers with assignments
-    // Add function containers with either their own assignments or variable children with assignments
-    for (const [, fnContainer] of functionMap.entries()) {
-      // Collect variable children for this function
-      const variableChildren: HierarchyContainer[] = [];
-      for (const [key, varContainer] of variableMap.entries()) {
-        if (key.startsWith(fnContainer.id + ':')) {
-          if ((containerAssignmentCount[varContainer.id] || 0) > 0) {
-            variableChildren.push(varContainer);
-          }
-        }
-      }
-
-      const hasFnAssignments = (containerAssignmentCount[fnContainer.id] || 0) > 0;
-      const hasVarAssignments = variableChildren.length > 0;
-      if (hasFnAssignments || hasVarAssignments) {
-        fnContainer.children = variableChildren;
-        fileContainer.children.push(fnContainer);
-      }
-    }
-
-    // Collapse single-child container chains (avoid collapsing the file container)
-    const reassignAll = (fromId: string, toId: string) => {
-      for (const [nodeId, cid] of Object.entries(codeAssignments)) {
-        if (cid === fromId) {
-          codeAssignments[nodeId] = toId;
-        }
-      }
-      containerAssignmentCount[toId] =
-        (containerAssignmentCount[toId] || 0) + (containerAssignmentCount[fromId] || 0);
-      delete containerAssignmentCount[fromId];
-    };
-
-    const collapseChains = (container: HierarchyContainer, isTopLevel: boolean) => {
-      // First collapse children
-      for (const child of container.children) {
-        collapseChains(child, false);
-      }
-
-      // Then attempt to collapse this container if it has exactly one child and no direct assignments
-      if (!isTopLevel && container.children.length === 1) {
-        const onlyChild = container.children[0];
-        const thisCount = containerAssignmentCount[container.id] || 0;
-        if (thisCount === 0) {
-          // Merge: move assignments from child to this container, adopt grandchildren, and combine name
-          reassignAll(onlyChild.id, container.id);
-          container.name = `${container.name}→${onlyChild.name}`;
-          container.children = onlyChild.children;
-        }
-      }
-    };
-
-    collapseChains(fileContainer, true);
-
-    const hierarchyChoices: Hierarchy[] = [
-      { id: 'location', name: 'Location', children },
-      { id: 'code', name: 'Code', children: codeChildren },
-    ];
-
-    return {
-      hierarchyChoices,
-      nodeAssignments: {
-        location: nodeAssignments,
-        code: codeAssignments,
-      },
-      selectedHierarchy: 'location',
-    };
-  }
-
-  /**
-   * Infer node type from operator name
-   *
-   * Uses pattern matching on common Hydro operators to classify them
-   * into categories (Source, Sink, Transform, Join, Network, Aggregation, Tee).
-   *
-   * @param operatorName The operator name (e.g., "map", "filter", "join")
-   * @returns The inferred node type
-   */
 
   /**
    * Check if an operator is a valid dataflow operator based on its return type

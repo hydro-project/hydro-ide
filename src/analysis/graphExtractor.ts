@@ -1,16 +1,37 @@
 /**
  * Graph Extractor - Tree-sitter + LSP type definition coordination
  *
- * Used by the legacy GraphExtractor-first analysis strategy. Coordinates between:
- * - TreeSitterAnalyzer: finds operator positions via syntax analysis
- * - LSPAnalyzer type definitions: provides type information (may return generics)
- *
- * Note: The modern hover-first strategy bypasses most of this logic, using
- * tree-sitter for positioning and LSP hover for concrete types instead.
- *
- * This class still serves two purposes:
- * 1. Provides operator positions for the hover-first strategy
- * 2. Implements the legacy GraphExtractor-first strategy (if configured)
+ * @deprecated This class primarily serves a legacy analysis strategy.
+ * 
+ * **Current Status:**
+ * - Used by `locationAnalyzer.ts` for location colorization
+ * - Provides operator positions for hover-first strategy (via tree-sitter)
+ * - Implements legacy GraphExtractor-first strategy (when hydroIde.analysis.useHoverFirst=false)
+ * 
+ * **Architecture Context:**
+ * This is NOT the same as LSPGraphExtractor (which generates Hydroscope visualizations).
+ * 
+ * Two separate visualization paths exist:
+ * 1. **LSPGraphExtractor**: Fast visualization path (tree-sitter + optional LSP enhancement)
+ *    - Used by: Quick visualization commands
+ *    - Output: Complete Hydroscope JSON
+ * 
+ * 2. **CargoOrchestrator**: Complete visualization path (cargo build + runtime extraction)
+ *    - Used by: Full visualization commands, LSP fallback
+ *    - Output: Hydroscope JSON with runtime backtraces
+ * 
+ * **This class (GraphExtractor)** is used for a third, different purpose:
+ * - Location colorization in the editor (syntax highlighting)
+ * - Coordinates tree-sitter positioning with LSP type queries
+ * - Legacy strategy: LSP type definitions first (may return generic types)
+ * - Modern strategy: LSP hover queries first (concrete instantiated types)
+ * 
+ * **Configuration:**
+ * - hydroIde.analysis.useHoverFirst=true (default): Hover-first strategy
+ * - hydroIde.analysis.useHoverFirst=false: GraphExtractor-first (legacy)
+ * 
+ * @see LSPGraphExtractor for visualization generation
+ * @see locationAnalyzer.ts for how this class is used
  */
 
 import * as vscode from 'vscode';

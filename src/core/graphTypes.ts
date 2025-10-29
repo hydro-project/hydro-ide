@@ -5,14 +5,7 @@
  * Services can import these types directly, or narrow them with Pick<> as needed.
  */
 
-export type NodeType =
-  | 'Source'
-  | 'Transform'
-  | 'Sink'
-  | 'Join'
-  | 'Network'
-  | 'Tee'
-  | 'Aggregation';
+export type NodeType = 'Source' | 'Transform' | 'Sink' | 'Join' | 'Network' | 'Tee' | 'Aggregation';
 
 export interface GraphNode {
   id: string;

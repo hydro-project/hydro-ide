@@ -1,9 +1,26 @@
 /**
- * Location Analyzer - Coordination layer
+ * Location Analyzer - Coordination layer for location type colorization
  *
- * Coordinates between tree-sitter (for operator positioning) and LSP hover analysis
- * (for concrete type information). By default, uses hover-based analysis as the primary
- * strategy since it provides concrete instantiated types rather than generic signatures.
+ * **Purpose:** Find all locations in a document for syntax highlighting in the editor.
+ * 
+ * **Not related to visualization:** This is separate from LSPGraphExtractor (which generates
+ * Hydroscope visualization JSON). This module is only for editor colorization.
+ * 
+ * **Two strategies (configurable via hydroIde.analysis.useHoverFirst):**
+ * 
+ * 1. **Hover-first (default, recommended):**
+ *    - Tree-sitter finds operator positions
+ *    - LSP hover queries provide concrete instantiated types (e.g., Process<Leader>)
+ *    - More accurate than type definitions which may return generics
+ * 
+ * 2. **GraphExtractor-first (legacy):**
+ *    - LSP type definitions provide types (may return generics like Process<P>)
+ *    - Hover used as fallback for unmatched operators
+ *    - Less accurate but kept for compatibility
+ * 
+ * @see graphExtractor.ts for tree-sitter + LSP type definition coordination
+ * @see lspAnalyzer.ts for LSP hover query implementation
+ * @see ARCHITECTURE.md for complete system architecture
  */
 
 import * as vscode from 'vscode';

@@ -19,6 +19,7 @@ import {
   ScopeAnalyzerConfig,
 } from '../core/types';
 import { RustParser } from './rustParser';
+import { findCargoToml, findRustFilesInWorkspace } from './utils';
 
 /**
  * Default configuration for scope analysis
@@ -152,7 +153,7 @@ export class ScopeAnalyzer {
     this.outputChannel.appendLine(`[ScopeAnalyzer] Found function: ${hydroFunction.name}`);
 
     // Find Cargo.toml for this file
-    const cargoTomlPath = await this.findCargoToml(workspaceFolder.uri.fsPath, document.fileName);
+    const cargoTomlPath = await findCargoToml(workspaceFolder.uri.fsPath, document.fileName);
     if (!cargoTomlPath) {
       throw new ScopeDetectionError(
         ScopeErrorCategory.NOT_IN_WORKSPACE,
@@ -198,7 +199,7 @@ export class ScopeAnalyzer {
     this.outputChannel.appendLine(`[ScopeAnalyzer] Found ${functions.length} Hydro function(s)`);
 
     // Find Cargo.toml for this file
-    const cargoTomlPath = await this.findCargoToml(workspaceFolder.uri.fsPath, document.fileName);
+    const cargoTomlPath = await findCargoToml(workspaceFolder.uri.fsPath, document.fileName);
     if (!cargoTomlPath) {
       throw new ScopeDetectionError(
         ScopeErrorCategory.NOT_IN_WORKSPACE,
@@ -233,7 +234,7 @@ export class ScopeAnalyzer {
     this.outputChannel.appendLine(`[ScopeAnalyzer] Scanning workspace: ${workspaceRoot}`);
 
     // Find Cargo.toml to confirm this is a Rust workspace
-    const cargoTomlPath = await this.findCargoToml(workspaceRoot);
+    const cargoTomlPath = await findCargoToml(workspaceRoot);
     if (!cargoTomlPath) {
       throw new ScopeDetectionError(
         ScopeErrorCategory.NOT_IN_WORKSPACE,
@@ -245,7 +246,7 @@ export class ScopeAnalyzer {
     this.outputChannel.appendLine(`[ScopeAnalyzer] Found Cargo.toml at: ${cargoTomlPath}`);
 
     // Find all Rust files in workspace
-    const rustFiles = await this.findRustFilesInWorkspace(workspaceRoot);
+    const rustFiles = await findRustFilesInWorkspace(workspaceRoot);
     this.outputChannel.appendLine(`[ScopeAnalyzer] Found ${rustFiles.length} Rust file(s)`);
 
     // Collect all Hydro functions from all files
@@ -335,162 +336,6 @@ export class ScopeAnalyzer {
     );
 
     return hydroFunctions;
-  }
-
-  /**
-   * Find Cargo.toml by walking up from a file path
-   */
-  private async findCargoTomlFromFile(filePath: string): Promise<string | null> {
-    let currentDir = path.dirname(filePath);
-    const root = path.parse(currentDir).root;
-
-    // Walk up the directory tree looking for Cargo.toml
-    while (currentDir !== root) {
-      const cargoTomlPath = path.join(currentDir, 'Cargo.toml');
-      try {
-        await fs.access(cargoTomlPath);
-        this.outputChannel.appendLine(`[ScopeAnalyzer] Found Cargo.toml at ${cargoTomlPath}`);
-        return cargoTomlPath;
-      } catch {
-        // Move up one directory
-        const parentDir = path.dirname(currentDir);
-        if (parentDir === currentDir) {
-          break; // Reached the root
-        }
-        currentDir = parentDir;
-      }
-    }
-
-    return null;
-  }
-
-  /**
-   * Find Cargo.toml in workspace
-   *
-   * Searches for Cargo.toml starting from workspace root and checking subdirectories.
-   * This handles both single-crate projects and workspace projects.
-   */
-  private async findCargoToml(workspaceRoot: string, filePath?: string): Promise<string | null> {
-    this.outputChannel.appendLine(`[ScopeAnalyzer] Searching for Cargo.toml in ${workspaceRoot}`);
-
-    // If we have a file path, try walking up from it first
-    if (filePath) {
-      const cargoToml = await this.findCargoTomlFromFile(filePath);
-      if (cargoToml) {
-        return cargoToml;
-      }
-    }
-
-    // Check workspace root first
-    const rootCargoToml = path.join(workspaceRoot, 'Cargo.toml');
-    try {
-      await fs.access(rootCargoToml);
-      this.outputChannel.appendLine(`[ScopeAnalyzer] Found Cargo.toml at workspace root`);
-      return rootCargoToml;
-    } catch {
-      // Not in root, search subdirectories
-    }
-
-    // Search common locations for Cargo.toml
-    const commonPaths = ['hydro/Cargo.toml', 'rust/Cargo.toml', 'src/Cargo.toml'];
-
-    for (const relativePath of commonPaths) {
-      const cargoTomlPath = path.join(workspaceRoot, relativePath);
-      try {
-        await fs.access(cargoTomlPath);
-        this.outputChannel.appendLine(`[ScopeAnalyzer] Found Cargo.toml at ${relativePath}`);
-        return cargoTomlPath;
-      } catch {
-        // Continue searching
-      }
-    }
-
-    // If not found in common locations, do a shallow search
-    try {
-      const entries = await fs.readdir(workspaceRoot, { withFileTypes: true });
-
-      for (const entry of entries) {
-        if (entry.isDirectory() && !entry.name.startsWith('.')) {
-          const cargoTomlPath = path.join(workspaceRoot, entry.name, 'Cargo.toml');
-          try {
-            await fs.access(cargoTomlPath);
-            this.outputChannel.appendLine(`[ScopeAnalyzer] Found Cargo.toml in ${entry.name}/`);
-            return cargoTomlPath;
-          } catch {
-            // Continue searching
-          }
-        }
-      }
-    } catch (error) {
-      this.outputChannel.appendLine(`[ScopeAnalyzer] Error searching for Cargo.toml: ${error}`);
-    }
-
-    this.outputChannel.appendLine('[ScopeAnalyzer] No Cargo.toml found in workspace');
-    return null;
-  }
-
-  /**
-   * Find all Rust files in workspace
-   *
-   * Recursively searches for .rs files, excluding common directories like
-   * target/, node_modules/, and hidden directories.
-   */
-  private async findRustFilesInWorkspace(workspaceRoot: string): Promise<string[]> {
-    this.outputChannel.appendLine(`[ScopeAnalyzer] Searching for Rust files in ${workspaceRoot}`);
-
-    const rustFiles: string[] = [];
-    const excludeDirs = new Set([
-      'target',
-      'node_modules',
-      'dist',
-      'build',
-      '.git',
-      '.vscode',
-      '.kiro',
-    ]);
-
-    /**
-     * Recursively scan directory for .rs files
-     */
-    const scanDirectory = async (dirPath: string, depth: number = 0): Promise<void> => {
-      // Limit recursion depth to prevent infinite loops
-      if (depth > 10) {
-        return;
-      }
-
-      try {
-        const entries = await fs.readdir(dirPath, { withFileTypes: true });
-
-        for (const entry of entries) {
-          const fullPath = path.join(dirPath, entry.name);
-
-          // Skip excluded directories and hidden files/directories
-          if (entry.name.startsWith('.') || excludeDirs.has(entry.name)) {
-            continue;
-          }
-
-          if (entry.isDirectory()) {
-            // Recursively scan subdirectories
-            await scanDirectory(fullPath, depth + 1);
-          } else if (entry.isFile() && entry.name.endsWith('.rs')) {
-            // Add Rust files
-            rustFiles.push(fullPath);
-          }
-        }
-      } catch (error) {
-        this.outputChannel.appendLine(
-          `[ScopeAnalyzer] Warning: Cannot read directory ${dirPath}: ${error}`
-        );
-        // Continue with other directories
-      }
-    };
-
-    // Start scanning from workspace root
-    await scanDirectory(workspaceRoot);
-
-    this.outputChannel.appendLine(`[ScopeAnalyzer] Found ${rustFiles.length} Rust file(s)`);
-
-    return rustFiles;
   }
 
   /**

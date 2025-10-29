@@ -115,16 +115,18 @@ describe('Paxos Graph Extraction', () => {
     // Build hierarchies
     const hier = (
       extractor as unknown as {
-        buildLocationAndCodeHierarchies: (
-          doc: vscode.TextDocument,
-          nodes: GNode[],
-          edges: GEdge[]
-        ) => {
-          hierarchyChoices: Hierarchy[];
-          nodeAssignments: Record<string, Record<string, string>>;
+        hierarchyBuilder: {
+          buildLocationAndCodeHierarchies: (
+            doc: vscode.TextDocument,
+            nodes: GNode[],
+            edges: GEdge[]
+          ) => {
+            hierarchyChoices: Hierarchy[];
+            nodeAssignments: Record<string, Record<string, string>>;
+          };
         };
       }
-    ).buildLocationAndCodeHierarchies(doc, nodes, edges);
+    ).hierarchyBuilder.buildLocationAndCodeHierarchies(doc, nodes, edges);
 
     // Basic presence checks
     expect(nodes.length).toBeGreaterThan(0);

@@ -15,6 +15,7 @@ import { TreeSitterRustParser, OperatorNode as TreeSitterOperatorNode } from './
 import { GraphBuilder } from './graphBuilder';
 import { OperatorRegistry } from './operatorRegistry';
 import { EdgeAnalyzer } from './edgeAnalyzer';
+import { HierarchyBuilder } from './hierarchyBuilder';
 
 // Import LocationInfo type for internal use
 import type { LocationInfo } from './locationAnalyzer';
@@ -182,6 +183,7 @@ export class LSPGraphExtractor {
   private graphBuilder: GraphBuilder;
   private operatorRegistry: OperatorRegistry;
   private edgeAnalyzer: EdgeAnalyzer;
+  private hierarchyBuilder: HierarchyBuilder;
 
   /**
    * Create a new LSP Graph Extractor
@@ -201,6 +203,8 @@ export class LSPGraphExtractor {
     this.graphBuilder = new GraphBuilder(this.treeSitterParser, this.operatorRegistry, outputChannel);
     this.edgeAnalyzer = EdgeAnalyzer.getInstance();
     this.edgeAnalyzer.setLogCallback((msg) => this.log(msg));
+    this.hierarchyBuilder = new HierarchyBuilder(this.treeSitterParser);
+    this.hierarchyBuilder.setLogCallback((msg) => this.log(msg));
 
     // Initialize the locationAnalyzer module with the output channel
     locationAnalyzer.initialize(outputChannel);
@@ -454,8 +458,8 @@ export class LSPGraphExtractor {
       this.log('Step 3: Enhancing nodes with LSP semantic information...');
       this.graphBuilder.enhanceWithLSP(nodes, locations, document);
 
-      // Step 4: Build hierarchies (Location + Code) from enhanced nodes
-      const hierarchyData = this.buildLocationAndCodeHierarchies(document, nodes, edges);
+      // Step 4: Build hierarchies (Location + Code) using HierarchyBuilder service
+      const hierarchyData = this.hierarchyBuilder.buildLocationAndCodeHierarchies(document, nodes, edges);
 
       // Step 5: Assemble final JSON
       const json = this.assembleHydroscopeJson(nodes, edges, hierarchyData);
@@ -1600,35 +1604,12 @@ export class LSPGraphExtractor {
   }
 
   /**
-   * Build location-based hierarchy
-   *
-   * Groups nodes by their Location type (Process, Cluster, External) and creates
-   * a hierarchical structure for visualization. Generates unique container IDs
-   * and assigns nodes to their corresponding containers.
-   *
-   * Implements degraded mode operation:
-   * - Creates basic hierarchy even with incomplete location info
-   * - Handles null/undefined location types gracefully
-   * - Assigns nodes without location info to default container
-   * - Logs warnings for degraded mode operation
-   *
-   * Requirements addressed:
-   * - 3.1: Groups nodes by Location type (Process, Cluster, External)
-   * - 3.2: Assigns each node to its corresponding Location container
-   * - 3.3: Extracts location type parameter names (e.g., Leader, Worker, Proposer)
-   * - 3.4: Creates hierarchy structure with id, name, and children fields
-   * - 3.5: Handles nodes without location information (assigns to default container)
-   * - 6.4: Create basic hierarchy even with incomplete location info
-   * - 6.5: Log warnings for degraded mode operation
-   *
-   * @param nodes Previously extracted nodes
-   * @returns HierarchyData containing hierarchy choices and node assignments
+   * NOTE: buildLocationAndCodeHierarchies, countTickDepth, buildTickLabel, and extractLocationLabel
+   * methods have been moved to HierarchyBuilder service
    */
-  private buildLocationAndCodeHierarchies(
-    document: vscode.TextDocument,
-    nodes: Node[],
-    edges: Edge[]
-  ): HierarchyData {
+
+  /**
+   * Infer node type from operator name (PLACEHOLDER - moved to service)
     // Build nested Tick hierarchy: base location (e.g., Worker), with children
     // Tick<Worker>, Tick<Tick<Worker>>, etc. Assign each node to the deepest
     // matching container based on the Tick depth present in its locationKind.
@@ -1973,89 +1954,6 @@ export class LSPGraphExtractor {
       },
       selectedHierarchy: 'location',
     };
-  }
-
-  /**
-   * Count nested Tick<> wrappers around a location kind string
-   * Examples:
-   * - "Process<Worker>" -> 0
-   * - "Tick<Process<Worker>>" -> 1
-   * - "Tick<Tick<Cluster<Leader>>>>" -> 2
-   */
-  private countTickDepth(locationKind: string): number {
-    let depth = 0;
-    let current = locationKind.trim();
-    while (current.startsWith('Tick<') && current.endsWith('>')) {
-      depth++;
-      current = current.substring(5, current.length - 1).trim();
-    }
-    return depth;
-  }
-
-  /**
-   * Build a nested Tick label for a given base label and depth
-   * depth=0 -> baseLabel
-   * depth=1 -> Tick<baseLabel>
-   * depth=2 -> Tick<Tick<baseLabel>>
-   */
-  private buildTickLabel(baseLabel: string, depth: number): string {
-    if (depth <= 0) return baseLabel;
-    let label = baseLabel;
-    for (let i = 0; i < depth; i++) {
-      label = `Tick<${label}>`;
-    }
-    return label;
-  }
-
-  /**
-   * Extract location label from locationKind string
-   *
-   * Extracts human-readable labels from location kind strings.
-   * Attempts to extract type parameter names (e.g., "Leader", "Worker", "Proposer")
-   * from patterns like "Process<Leader>", "Cluster<Worker>", etc.
-   *
-   * Examples:
-   * - "Process<Leader>" -> "Leader"
-   * - "Cluster<Worker>" -> "Worker"
-   * - "Tick<Process<Proposer>>" -> "Proposer"
-   * - "Process" -> "Process"
-   * - null -> "(unknown location)"
-   *
-   * @param locationKind The location kind string (e.g., "Process<Leader>")
-   * @returns Human-readable location label
-   */
-  private extractLocationLabel(locationKind: string | null): string {
-    if (!locationKind) {
-      return '(unknown location)';
-    }
-
-    // Strip Tick wrappers to get the base location
-    let unwrapped = locationKind;
-    while (unwrapped.startsWith('Tick<') && unwrapped.endsWith('>')) {
-      unwrapped = unwrapped.substring(5, unwrapped.length - 1);
-    }
-
-    // Try to extract type parameter name from patterns like "Process<Leader>"
-    // Match: Type<Parameter> where Parameter is the type parameter name
-    const paramMatch = unwrapped.match(/^(?:Process|Cluster|External)<([^>]+)>/);
-    if (paramMatch) {
-      // Extract the type parameter (e.g., "Leader", "Worker", "Proposer")
-      const param = paramMatch[1].trim();
-
-      // Handle lifetime parameters (e.g., "'a, Leader" -> "Leader")
-      const cleanParam = param.replace(/^'[a-z]+,\s*/, '');
-
-      return cleanParam;
-    }
-
-    // If no type parameter found, try to extract just the base type
-    const baseMatch = unwrapped.match(/^(Process|Cluster|External)/);
-    if (baseMatch) {
-      return baseMatch[1];
-    }
-
-    // Fallback: return the original locationKind
-    return locationKind;
   }
 
   /**

@@ -238,16 +238,18 @@ describe('LSP Graph Extractor Unit Tests', () => {
 
       const hierarchy = (
         extractor as unknown as {
-          buildLocationAndCodeHierarchies: (
-            doc: vscode.TextDocument,
-            nodes: GNode[],
-            edges: GEdge[]
-          ) => {
-            hierarchyChoices: Hierarchy[];
-            nodeAssignments: Record<string, Record<string, string>>;
+          hierarchyBuilder: {
+            buildLocationAndCodeHierarchies: (
+              doc: vscode.TextDocument,
+              nodes: GNode[],
+              edges: GEdge[]
+            ) => {
+              hierarchyChoices: Hierarchy[];
+              nodeAssignments: Record<string, Record<string, string>>;
+            };
           };
         }
-      ).buildLocationAndCodeHierarchies(doc, nodes, edges);
+      ).hierarchyBuilder.buildLocationAndCodeHierarchies(doc, nodes, edges);
 
       const locationHierarchy = hierarchy.hierarchyChoices.find((h) => h.id === 'location');
       expect(locationHierarchy, 'location hierarchy exists').toBeTruthy();
@@ -341,16 +343,18 @@ describe('LSP Graph Extractor Unit Tests', () => {
 
       const hierarchy = (
         extractor as unknown as {
-          buildLocationAndCodeHierarchies: (
-            doc: vscode.TextDocument,
-            nodes: GNode[],
-            edges: GEdge[]
-          ) => {
-            hierarchyChoices: Hierarchy[];
-            nodeAssignments: Record<string, Record<string, string>>;
+          hierarchyBuilder: {
+            buildLocationAndCodeHierarchies: (
+              doc: vscode.TextDocument,
+              nodes: GNode[],
+              edges: GEdge[]
+            ) => {
+              hierarchyChoices: Hierarchy[];
+              nodeAssignments: Record<string, Record<string, string>>;
+            };
           };
         }
-      ).buildLocationAndCodeHierarchies(doc, nodes, edges);
+      ).hierarchyBuilder.buildLocationAndCodeHierarchies(doc, nodes, edges);
 
       const codeHierarchy = hierarchy.hierarchyChoices.find((h) => h.id === 'code');
       expect(codeHierarchy, 'code hierarchy exists').toBeTruthy();

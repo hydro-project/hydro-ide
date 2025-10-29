@@ -2,180 +2,159 @@
  * Location Analyzer - Coordination layer for location type colorization
  *
  * **Purpose:** Find all locations in a document for syntax highlighting in the editor.
- * 
+ *
  * **Not related to visualization:** This is separate from LSPGraphExtractor (which generates
  * Hydroscope visualization JSON). This module is only for editor colorization.
- * 
- * **Two strategies (configurable via hydroIde.analysis.useHoverFirst):**
- * 
- * 1. **Hover-first (default, recommended):**
- *    - Tree-sitter finds operator positions
- *    - LSP hover queries provide concrete instantiated types (e.g., Process<Leader>)
- *    - More accurate than type definitions which may return generics
- * 
- * 2. **GraphExtractor-first (legacy):**
- *    - LSP type definitions provide types (may return generics like Process<P>)
- *    - Hover used as fallback for unmatched operators
- *    - Less accurate but kept for compatibility
- * 
- * @see graphExtractor.ts for tree-sitter + LSP type definition coordination
+ *
+ * **Strategy:**
+ * - Tree-sitter finds operator positions
+ * - LSP hover queries provide concrete instantiated types (e.g., Process<Leader>)
+ * - More accurate than type definitions which may return generics
+ *
+ * @see TreeSitterRustParser for operator position finding
  * @see lspAnalyzer.ts for LSP hover query implementation
  * @see ARCHITECTURE.md for complete system architecture
  */
 
 import * as vscode from 'vscode';
-import { GraphExtractor, LocationInfo, CacheStats } from './graphExtractor';
-import { LSPAnalyzer } from './lspAnalyzer';
-import { ScopeTarget } from '../core/types';
+import { TreeSitterRustParser } from './treeSitterParser';
+import { LSPAnalyzer, LocationInfo, CacheStats } from './lspAnalyzer';
 
 /**
- * Global GraphExtractor instance
+ * Simplified operator call information for location colorization
  */
-let graphExtractor: GraphExtractor | null = null;
+interface OperatorCall {
+  /** Operator name (method name) */
+  name: string;
+  /** Line number (0-indexed) */
+  line: number;
+  /** Column number (0-indexed) */
+  column: number;
+}
+
+/**
+ * Variable binding information for colorization
+ */
+interface VariableBinding {
+  /** Variable name */
+  variableName: string;
+  /** Line where the variable is declared */
+  line: number;
+  /** Operators in the assignment chain */
+  operators: OperatorCall[];
+}
+
+/**
+ * Global instances
+ */
+let treeSitterParser: TreeSitterRustParser | null = null;
 let lspAnalyzer: LSPAnalyzer | null = null;
 
 /**
  * Initialize the analyzer with an output channel
  */
 export function initialize(channel?: vscode.OutputChannel): void {
-  graphExtractor = new GraphExtractor(channel);
+  // Create a channel for tree-sitter if none provided
+  const tsChannel =
+    channel ||
+    ({
+      name: 'LocationAnalyzer',
+      append: () => {},
+      appendLine: () => {},
+      replace: () => {},
+      clear: () => {},
+      show: () => {},
+      hide: () => {},
+      dispose: () => {},
+    } as unknown as vscode.OutputChannel);
+
+  treeSitterParser = new TreeSitterRustParser(tsChannel);
   lspAnalyzer = new LSPAnalyzer(channel);
 }
 
 /**
  * Analyze a document to find all identifiers with Location types
  *
- * Uses two strategies (configurable via hydroIde.analysis.useHoverFirst):
- *
- * 1. Hover-first (default, recommended):
- *    - Tree-sitter finds operator positions
- *    - LSP hover queries provide concrete types (e.g., Process<Leader>)
- *    - Better accuracy for instantiated generic types
- *
- * 2. GraphExtractor-first (legacy):
- *    - LSP type definitions provide types (may return generics like Process<P>)
- *    - Hover used as fallback for unmatched operators
+ * Strategy:
+ * 1. Tree-sitter finds all operator positions
+ * 2. LSP hover queries provide concrete types (e.g., Process<Leader>)
+ * 3. Variables are colorized based on their operator chains
  */
 export async function analyzeDocument(document: vscode.TextDocument): Promise<LocationInfo[]> {
-  if (!graphExtractor || !lspAnalyzer) {
+  if (!treeSitterParser || !lspAnalyzer) {
     console.error('LocationAnalyzer not initialized');
     return [];
   }
 
-  const config = vscode.workspace.getConfiguration('hydroIde');
-  const useHoverFirst = config.get<boolean>('analysis.useHoverFirst', true);
+  // Step 1: Use tree-sitter to find all operator positions
+  const rawBindings = treeSitterParser.parseVariableBindings(document);
+  const rawChains = treeSitterParser.parseStandaloneChains(document);
 
-  // Use file scope as default
-  const scopeTarget: ScopeTarget = {
-    type: 'file',
-    functions: [],
-    workspaceRoot: '',
-    activeFilePath: document.fileName,
-  };
+  // Convert to simplified format and collect all positions
+  const allPositions: Array<{ position: vscode.Position; operatorName: string }> = [];
+  const variableBindings: VariableBinding[] = [];
 
-  if (useHoverFirst) {
-    // HOVER-FIRST STRATEGY (default): Use hover-based analysis as primary method
-    // Hover provides concrete instantiated types (e.g., Process<Leader>) rather than
-    // generic signatures (e.g., Process<P>), leading to more accurate colorization.
+  // Process variable bindings
+  for (const binding of rawBindings) {
+    const operators: OperatorCall[] = binding.operators.map((op) => ({
+      name: op.name,
+      line: op.line,
+      column: op.column,
+    }));
 
-    // Step 1: Use tree-sitter to find all operator positions
-    const result = await graphExtractor.extractGraph(document, scopeTarget);
+    variableBindings.push({
+      variableName: binding.varName,
+      line: binding.line,
+      operators,
+    });
 
-    // Collect ALL operator positions from both matched and unmatched
-    const allPositions: Array<{ position: vscode.Position; operatorName: string }> = [];
-
-    // Add positions from matched operators
-    for (const matched of result.matchedOperators) {
-      allPositions.push({
-        position: matched.locationInfo.range.start,
-        operatorName: matched.locationInfo.operatorName,
-      });
-    }
-
-    // Add positions from unmatched operators
-    for (const op of result.unmatchedTreeSitterOperators) {
+    // Add positions for hover queries
+    for (const op of binding.operators) {
       allPositions.push({
         position: new vscode.Position(op.line, op.column),
         operatorName: op.name,
       });
     }
-
-    if (allPositions.length === 0) {
-      return [];
-    }
-
-    // Step 2: Query hover at each position to get concrete types
-    const hoverResults = await lspAnalyzer.analyzePositions(document, allPositions);
-
-    // Step 3: Colorize variables based on their operator chains
-    const variableResults = lspAnalyzer.colorizeVariables(
-      document,
-      hoverResults,
-      result.variableBindings
-    );
-
-    return [...hoverResults, ...variableResults];
-  } else {
-    // GRAPHEXTRACTOR-FIRST STRATEGY (legacy): Use LSP type definitions first
-    // This may return generic types; hover is used as fallback for unmatched operators.
-    const result = await graphExtractor.extractGraph(document, scopeTarget);
-    const matched = result.matchedOperators.map((m) => m.locationInfo);
-
-    // Use hover analysis for operators that GraphExtractor couldn't type
-    if (result.unmatchedTreeSitterOperators.length > 0) {
-      const enableFallback = config.get<boolean>('analysis.fallbackToHoverAnalyzer', true);
-
-      if (enableFallback) {
-        try {
-          const positions = result.unmatchedTreeSitterOperators.map((op) => ({
-            position: new vscode.Position(op.line, op.column),
-            operatorName: op.name,
-          }));
-
-          const hoverResults = await lspAnalyzer.analyzePositions(document, positions);
-
-          if (hoverResults && hoverResults.length > 0) {
-            const matchedPositions = new Set(
-              matched.map((m) => `${m.range.start.line}:${m.range.start.character}`)
-            );
-
-            const additionalResults = hoverResults.filter((h) => {
-              const posKey = `${h.range.start.line}:${h.range.start.character}`;
-              return !matchedPositions.has(posKey);
-            });
-
-            if (additionalResults.length > 0) {
-              return [...matched, ...additionalResults];
-            }
-          }
-        } catch (err) {
-          // Continue with GraphExtractor results only
-        }
-      }
-    }
-
-    return matched;
   }
+
+  // Process standalone chains
+  for (const chain of rawChains) {
+    for (const op of chain) {
+      allPositions.push({
+        position: new vscode.Position(op.line, op.column),
+        operatorName: op.name,
+      });
+    }
+  }
+
+  if (allPositions.length === 0) {
+    return [];
+  }
+
+  // Step 2: Query hover at each position to get concrete types
+  const hoverResults = await lspAnalyzer.analyzePositions(document, allPositions);
+
+  // Step 3: Colorize variables based on their operator chains
+  const variableResults = lspAnalyzer.colorizeVariables(document, hoverResults, variableBindings);
+
+  return [...hoverResults, ...variableResults];
 }
 
 /**
- * Clear cache
+ * Clear cache (LSP analyzer only)
  */
 export function clearCache(uri?: string): void {
-  if (graphExtractor) {
-    graphExtractor.clearCache(uri);
-  }
   if (lspAnalyzer) {
     lspAnalyzer.clearCache(uri);
   }
 }
 
 /**
- * Get cache statistics
+ * Get cache statistics (LSP analyzer only)
  */
 export function getCacheStats(): CacheStats {
-  if (graphExtractor) {
-    return graphExtractor.getCacheStats();
+  if (lspAnalyzer) {
+    return lspAnalyzer.getCacheStats();
   }
   return { hits: 0, misses: 0, numFiles: 0, hitRatePercent: 0 };
 }

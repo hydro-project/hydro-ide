@@ -2,33 +2,33 @@
  * LSP Graph Extractor - Fast Hydroscope Visualization Generator
  *
  * **Purpose:** Generate complete Hydroscope JSON visualization without Cargo compilation.
- * 
+ *
  * **Not related to location colorization:** This is separate from locationAnalyzer/GraphExtractor
  * (which colorize location types in the editor). This class generates full graph visualizations.
- * 
+ *
  * **Architecture:**
  * This is the "fast path" for visualization — uses tree-sitter for operator structure
  * with optional LSP enhancement for type information. Produces the same Hydroscope JSON
  * format as the Cargo-based path, but without runtime backtraces.
- * 
+ *
  * **Services used:**
  * - TreeSitterRustParser: Parse Rust AST, find operator chains
- * - GraphBuilder: Create nodes and edges from operators  
+ * - GraphBuilder: Create nodes and edges from operators
  * - EdgeAnalyzer: Add network semantic tags to edges
  * - HierarchyBuilder: Build location + code hierarchies
  * - OperatorRegistry: Classify operators by type
- * 
+ *
  * **Output:** Complete HydroscopeJson ready for rendering
- * 
+ *
  * **Advantages:**
  * - ⚡ Fast (1-2 seconds, no compilation)
  * - 🔄 Instant feedback during development
  * - 💾 Cached for subsequent visualizations
- * 
+ *
  * **Trade-offs:**
  * - No runtime backtraces (hierarchy based on types, not execution)
  * - LSP enhancement is best-effort (may not have complete type info)
- * 
+ *
  * @see CargoOrchestrator for the complete visualization path (with runtime info)
  * @see locationAnalyzer.ts for location colorization (different feature)
  * @see ARCHITECTURE.md for complete system architecture

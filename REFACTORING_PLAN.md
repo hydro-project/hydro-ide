@@ -12,6 +12,7 @@ The monolithic `lspGraphExtractor` has been successfully refactored into a clean
 ### Phase Summary
 
 #### Phase 1-2: Utilities & Services ✅
+
 - ✅ Created `utils.ts` — File/path utilities with tests
 - ✅ Created `stringUtils.ts` — String manipulation utilities (30 tests)
 - ✅ Created `typeParser.ts` — Type parsing utilities (23 tests)
@@ -20,6 +21,7 @@ The monolithic `lspGraphExtractor` has been successfully refactored into a clean
 - ✅ Created `cacheManager.ts` — Generic LRU cache with TTL (44 tests)
 
 #### Phase 3: lspGraphExtractor Refactor ✅
+
 - ✅ **3.1**: Extracted `GraphBuilder` (513 lines, 20 tests) — Tree-sitter parsing, node/edge creation
 - ✅ **3.2**: Removed duplicate operator logic (213 lines removed)
 - ✅ **3.3**: Extracted `EdgeAnalyzer` (155 lines, 10 tests) — Network semantic tagging
@@ -27,6 +29,7 @@ The monolithic `lspGraphExtractor` has been successfully refactored into a clean
 - ✅ **3.5**: Final orchestrator cleanup (892 lines removed) — Removed legacy methods and dead code
 
 #### Phase 4: Architecture Clarity ✅
+
 - ✅ **4.1-4.3**: Analyzed function-finding logic — Determined `TreeSitterParser.findEnclosingFunctionName()` is already well-architected, no duplication
 - ✅ **4.4**: Removed massive dead code block (365 lines) — Orphaned hierarchy-building logic left from Phase 3 extraction
 - ✅ **4.5**: Created comprehensive architecture documentation:
@@ -35,6 +38,7 @@ The monolithic `lspGraphExtractor` has been successfully refactored into a clean
   - Clarified distinction between visualization (LSPGraphExtractor) and colorization (GraphExtractor)
 
 #### Phase 5: Types Consolidation ✅
+
 - ✅ **Types A**: Migrated `HierarchyBuilder` and `EdgeAnalyzer` to shared `core/graphTypes`
 - ✅ **Types B**: Migrated `lspGraphExtractor` to import/re-export from shared types
 - ✅ **Types C**: Migrated `GraphBuilder` to use shared types
@@ -44,26 +48,26 @@ The monolithic `lspGraphExtractor` has been successfully refactored into a clean
 
 #### File Size Reductions
 
-| File | Before | After | Change | % Reduction |
-|------|--------|-------|--------|-------------|
-| `lspGraphExtractor.ts` | 3,326 | **1,049** | **−2,277** | **68%** |
-| Total analysis module | ~10,000 | ~11,500 | +1,500 | +15% (new services) |
+| File                   | Before  | After     | Change     | % Reduction         |
+| ---------------------- | ------- | --------- | ---------- | ------------------- |
+| `lspGraphExtractor.ts` | 3,326   | **1,049** | **−2,277** | **68%**             |
+| Total analysis module  | ~10,000 | ~11,500   | +1,500     | +15% (new services) |
 
 **Net Result**: Complexity distributed across 9 focused modules instead of 1 monolith!
 
 #### New Services Created
 
-| Service | Lines | Tests | Responsibility |
-|---------|-------|-------|----------------|
-| `GraphBuilder` | 513 | 20 | Parse operators, create nodes/edges |
-| `EdgeAnalyzer` | 155 | 10 | Add network semantic tags |
-| `HierarchyBuilder` | 523 | 12 | Build location & code hierarchies |
-| `OperatorRegistry` | 360 | 48 | Classify operators, singleton |
-| `HydroscopeConfig` | ~200 | 37 | Static Hydroscope configuration |
-| `CacheManager` | ~150 | 44 | Generic LRU cache with TTL |
-| `StringUtils` | ~120 | 23 | String manipulation utilities |
-| `TypeParser` | ~100 | 30 | Hydro type parsing |
-| **Total** | **2,121** | **224** | **8 focused services** |
+| Service            | Lines     | Tests   | Responsibility                      |
+| ------------------ | --------- | ------- | ----------------------------------- |
+| `GraphBuilder`     | 513       | 20      | Parse operators, create nodes/edges |
+| `EdgeAnalyzer`     | 155       | 10      | Add network semantic tags           |
+| `HierarchyBuilder` | 523       | 12      | Build location & code hierarchies   |
+| `OperatorRegistry` | 360       | 48      | Classify operators, singleton       |
+| `HydroscopeConfig` | ~200      | 37      | Static Hydroscope configuration     |
+| `CacheManager`     | ~150      | 44      | Generic LRU cache with TTL          |
+| `StringUtils`      | ~120      | 23      | String manipulation utilities       |
+| `TypeParser`       | ~100      | 30      | Hydro type parsing                  |
+| **Total**          | **2,121** | **224** | **8 focused services**              |
 
 #### Test Coverage
 
@@ -84,24 +88,27 @@ The monolithic `lspGraphExtractor` has been successfully refactored into a clean
 ### Architecture Highlights
 
 **Two Visualization Paths:**
+
 1. **LSPGraphExtractor** (fast, tree-sitter + LSP) → 1-2 seconds, no compilation
 2. **CargoOrchestrator** (complete, cargo build + runtime) → 10-60 seconds, full backtraces
 
 **Location Colorization:**
+
 - Separate feature using `GraphExtractor` + `locationAnalyzer`
 - Two strategies: hover-first (default) vs GraphExtractor-first (legacy)
 
 **Key Innovation:**
+
 - `LSPGraphExtractor` now pure orchestrator delegating to 5 specialized services
 - Each service independently testable and maintainable
 - Shared type system prevents schema drift
 
 ### Remaining Work
 
-**None!** All planned phases complete. Future improvements could include:
+**None!** All planned phases complete, plus additional simplifications. Future improvements could include:
 
-1. **Consolidate tree-sitter usage** — TreeSitterAnalyzer vs TreeSitterRustParser share similar logic
-2. **Remove GraphExtractor-first strategy** — If hover-first proves superior (config: `hydroIde.analysis.useHoverFirst`)
+1. ✅ **Consolidate tree-sitter usage (COMPLETED - Oct 29, 2025)** — Removed TreeSitterAnalyzer wrapper
+2. ✅ **Eliminate GraphExtractor (COMPLETED - Oct 29, 2025)** — Removed wasteful intermediate layer, locationAnalyzer now uses TreeSitterRustParser directly
 3. **Incremental analysis** — Only re-analyze changed portions of large files
 
 ### Documentation Artifacts
@@ -640,20 +647,22 @@ src/analysis/
 **Responsibility**: Orchestrate all services to generate complete Hydroscope JSON
 
 **Public API**:
+
 ```typescript
 class LSPGraphExtractor {
-  constructor(outputChannel: vscode.OutputChannel)
-  
+  constructor(outputChannel: vscode.OutputChannel);
+
   // Main entry point - generate Hydroscope JSON without Cargo
-  extractGraph(document: vscode.TextDocument, scopeTarget: ScopeTarget): Promise<HydroscopeJson>
-  
+  extractGraph(document: vscode.TextDocument, scopeTarget: ScopeTarget): Promise<HydroscopeJson>;
+
   // Cache management
-  getCacheStats(): { hits: number; misses: number; hitRate: string }
-  clearCache(): void
+  getCacheStats(): { hits: number; misses: number; hitRate: string };
+  clearCache(): void;
 }
 ```
 
 **Orchestration Flow**:
+
 1. Check cache (CacheManager)
 2. Build graph (GraphBuilder via tree-sitter)
 3. Enhance with LSP (optional, best-effort)
@@ -665,6 +674,7 @@ class LSPGraphExtractor {
 **Dependencies**: GraphBuilder, EdgeAnalyzer, HierarchyBuilder, OperatorRegistry
 
 **Does NOT**:
+
 - Parse Rust code directly (delegates to GraphBuilder)
 - Make LSP queries (delegates to locationAnalyzer module)
 - Classify operators (delegates to OperatorRegistry)
@@ -678,22 +688,27 @@ class LSPGraphExtractor {
 **Responsibility**: Build operator graph nodes and edges from Rust source code
 
 **Public API**:
+
 ```typescript
 class GraphBuilder {
   constructor(
     treeSitterParser: TreeSitterRustParser,
     operatorRegistry: OperatorRegistry,
     outputChannel: vscode.OutputChannel
-  )
-  
+  );
+
   // Build nodes/edges from tree-sitter analysis
-  buildFromTreeSitter(document: vscode.TextDocument, scopeTarget: unknown): GraphBuildResult
-  
+  buildFromTreeSitter(document: vscode.TextDocument, scopeTarget: unknown): GraphBuildResult;
+
   // Enhance nodes with LSP semantic information (optional)
-  enhanceWithLSP(nodes: Node[], locations: LocationInfo[], document: vscode.TextDocument): void
-  
+  enhanceWithLSP(nodes: Node[], locations: LocationInfo[], document: vscode.TextDocument): void;
+
   // Detect variable references for inter-chain edges
-  detectVariableReference(document: vscode.TextDocument, line: number, variableNames: string[]): string | null
+  detectVariableReference(
+    document: vscode.TextDocument,
+    line: number,
+    variableNames: string[]
+  ): string | null;
 }
 
 interface GraphBuildResult {
@@ -703,6 +718,7 @@ interface GraphBuildResult {
 ```
 
 **Key Behaviors**:
+
 - Uses tree-sitter to find operator chains (variable bindings + standalone)
 - Creates node for each operator with initial metadata
 - Builds edges between operators in same chain
@@ -713,6 +729,7 @@ interface GraphBuildResult {
 **Dependencies**: TreeSitterRustParser, OperatorRegistry
 
 **Does NOT**:
+
 - Add semantic tags to edges (that's EdgeAnalyzer)
 - Build hierarchies (that's HierarchyBuilder)
 - Filter by scope (that's LSPGraphExtractor)
@@ -726,18 +743,20 @@ interface GraphBuildResult {
 **Responsibility**: Add network semantic tags to edges
 
 **Public API**:
+
 ```typescript
 class EdgeAnalyzer {
-  static getInstance(): EdgeAnalyzer
-  
-  setLogCallback(callback: (msg: string) => void): void
-  
+  static getInstance(): EdgeAnalyzer;
+
+  setLogCallback(callback: (msg: string) => void): void;
+
   // Analyze edges and add network semantic tags
-  analyzeNetworkEdges(edges: Edge[], nodes: Node[]): void
+  analyzeNetworkEdges(edges: Edge[], nodes: Node[]): void;
 }
 ```
 
 **Key Behaviors**:
+
 - Identifies network edges (one endpoint is Network operator)
 - Tags edges with `["network_send"]` or `["network_recv"]`
 - Adds edge labels like "→ remote" or "remote →"
@@ -747,6 +766,7 @@ class EdgeAnalyzer {
 **Dependencies**: OperatorRegistry (via isNetworkingOperator)
 
 **Does NOT**:
+
 - Create new edges (only annotates existing ones)
 - Build nodes (only reads node metadata)
 - Know about hierarchies (operates on flat graph)
@@ -760,18 +780,19 @@ class EdgeAnalyzer {
 **Responsibility**: Build location and code hierarchies from nodes
 
 **Public API**:
+
 ```typescript
 class HierarchyBuilder {
-  constructor(treeSitterParser: TreeSitterRustParser)
-  
-  setLogCallback(callback: (msg: string) => void): void
-  
+  constructor(treeSitterParser: TreeSitterRustParser);
+
+  setLogCallback(callback: (msg: string) => void): void;
+
   // Build both location and code hierarchies
   buildLocationAndCodeHierarchies(
     document: vscode.TextDocument,
     nodes: Node[],
     edges: Edge[]
-  ): HierarchyData
+  ): HierarchyData;
 }
 
 interface HierarchyData {
@@ -782,6 +803,7 @@ interface HierarchyData {
 ```
 
 **Key Behaviors**:
+
 - **Location Hierarchy**: Groups by location type, tick depth, connected components
   - Base locations (Process, Cluster, etc.)
   - Nested tick levels (Tick<Process>, Tick<Tick<Process>>)
@@ -797,6 +819,7 @@ interface HierarchyData {
 **Dependencies**: TreeSitterRustParser
 
 **Does NOT**:
+
 - Create nodes or edges (only organizes them)
 - Query LSP (uses pre-computed node metadata)
 - Filter by scope (works with all nodes)
@@ -810,29 +833,31 @@ interface HierarchyData {
 **Responsibility**: Classify and validate Hydro operators
 
 **Public API**:
+
 ```typescript
 class OperatorRegistry {
-  static getInstance(): OperatorRegistry
-  
+  static getInstance(): OperatorRegistry;
+
   // Classification
-  isKnownDataflowOperator(operatorName: string): boolean
-  isNetworkingOperator(operatorName: string): boolean
-  isSinkOperator(operatorName: string): boolean
-  
+  isKnownDataflowOperator(operatorName: string): boolean;
+  isNetworkingOperator(operatorName: string): boolean;
+  isSinkOperator(operatorName: string): boolean;
+
   // Type inference
-  inferNodeType(operatorName: string): NodeType
-  getLocationType(locationKind: string | null): string | null
-  
+  inferNodeType(operatorName: string): NodeType;
+  getLocationType(locationKind: string | null): string | null;
+
   // Validation
-  isValidDataflowOperator(operatorName: string, returnType: string | null): boolean
-  
+  isValidDataflowOperator(operatorName: string, returnType: string | null): boolean;
+
   // Configuration
-  updateFromConfig(operatorLists: OperatorLists): void
-  getOperatorLists(): OperatorLists
+  updateFromConfig(operatorLists: OperatorLists): void;
+  getOperatorLists(): OperatorLists;
 }
 ```
 
 **Key Behaviors**:
+
 - Loads operator lists from VS Code configuration (`package.json` defaults)
 - Classifies operators by type (Source, Transform, Sink, Join, Network, etc.)
 - Validates operators based on return types (Hydro collection types)
@@ -843,6 +868,7 @@ class OperatorRegistry {
 **Dependencies**: None (standalone utility)
 
 **Does NOT**:
+
 - Parse code (just classifies names/types)
 - Make LSP queries (operates on strings)
 - Know about graph structure (operates on individual operators)
@@ -856,18 +882,19 @@ class OperatorRegistry {
 **Responsibility**: Parse Rust AST to find operator chains
 
 **Public API**:
+
 ```typescript
 class TreeSitterRustParser {
-  constructor(outputChannel: vscode.OutputChannel)
-  
+  constructor(outputChannel: vscode.OutputChannel);
+
   // Parse variable bindings with their operator chains
-  parseVariableBindings(document: vscode.TextDocument): VariableBindingNode[]
-  
+  parseVariableBindings(document: vscode.TextDocument): VariableBindingNode[];
+
   // Parse standalone operator chains (not assigned to variables)
-  parseStandaloneChains(document: vscode.TextDocument): OperatorNode[][]
-  
+  parseStandaloneChains(document: vscode.TextDocument): OperatorNode[][];
+
   // Find enclosing function name for a line
-  findEnclosingFunctionName(document: vscode.TextDocument, line: number): string | null
+  findEnclosingFunctionName(document: vscode.TextDocument, line: number): string | null;
 }
 
 interface OperatorNode {
@@ -876,11 +903,12 @@ interface OperatorNode {
   column: number;
   endLine: number;
   endColumn: number;
-  tickVariable?: string;  // For temporal operators
+  tickVariable?: string; // For temporal operators
 }
 ```
 
 **Key Behaviors**:
+
 - Uses tree-sitter Rust grammar to parse AST
 - Finds method call chains (e.g., `source.map().filter()`)
 - Tracks variable bindings (e.g., `let x = source.map()`)
@@ -891,6 +919,7 @@ interface OperatorNode {
 **Dependencies**: tree-sitter, tree-sitter-rust
 
 **Does NOT**:
+
 - Create nodes/edges (just finds operators)
 - Classify operators (that's OperatorRegistry)
 - Query LSP (pure AST parsing)
@@ -904,22 +933,24 @@ interface OperatorNode {
 **Responsibility**: Generic LRU cache with TTL support
 
 **Public API**:
+
 ```typescript
 class CacheManager<T> {
-  constructor(maxSize: number = 50, maxAgeMs: number = 5 * 60 * 1000)
-  
+  constructor(maxSize: number = 50, maxAgeMs: number = 5 * 60 * 1000);
+
   // Cache operations
-  get(key: string): T | null
-  set(key: string, value: T): void
-  delete(key: string): boolean
-  clear(): void
-  
+  get(key: string): T | null;
+  set(key: string, value: T): void;
+  delete(key: string): boolean;
+  clear(): void;
+
   // Statistics
-  getStats(): { hits: number; misses: number; size: number; hitRate: string }
+  getStats(): { hits: number; misses: number; size: number; hitRate: string };
 }
 ```
 
 **Key Behaviors**:
+
 - LRU eviction when cache exceeds maxSize
 - Automatic TTL-based expiration
 - Tracks hit/miss statistics
@@ -937,21 +968,23 @@ class CacheManager<T> {
 **Responsibility**: String manipulation for labels, locations, and types
 
 **Public API**:
+
 ```typescript
 // Label extraction
-export function extractFullLabel(document: vscode.TextDocument, range: vscode.Range): string
+export function extractFullLabel(document: vscode.TextDocument, range: vscode.Range): string;
 
 // Location parsing
-export function normalizeLocationKind(locationKind: string): string
-export function extractLocationLabel(locationKind: string | null): string
-export function countTickDepth(locationKind: string): number
-export function buildTickLabel(baseLabel: string, depth: number): string
+export function normalizeLocationKind(locationKind: string): string;
+export function extractLocationLabel(locationKind: string | null): string;
+export function countTickDepth(locationKind: string): number;
+export function buildTickLabel(baseLabel: string, depth: number): string;
 
 // ID generation
-export function getLocationId(locationKind: string | null): number | null
+export function getLocationId(locationKind: string | null): number | null;
 ```
 
 **Key Behaviors**:
+
 - Pure functions (no state)
 - Handles edge cases (null, undefined, malformed strings)
 - Location ID via hash function (deterministic)
@@ -968,16 +1001,18 @@ export function getLocationId(locationKind: string | null): number | null
 **Responsibility**: Parse Hydro type annotations
 
 **Public API**:
+
 ```typescript
 // Type parameter parsing
-export function parseHydroTypeParameters(typeString: string): string | null
+export function parseHydroTypeParameters(typeString: string): string | null;
 
 // Lattice property extraction
-export function extractBoundedness(typeParams: string | null): string | null
-export function extractOrdering(typeParams: string | null): string | null
+export function extractBoundedness(typeParams: string | null): string | null;
+export function extractOrdering(typeParams: string | null): string | null;
 ```
 
 **Key Behaviors**:
+
 - Parses generic type parameters (e.g., `Stream<T, Unbounded, NoOrder>`)
 - Extracts lattice properties (boundedness, ordering)
 - Handles nested generics and complex types
@@ -994,20 +1029,22 @@ export function extractOrdering(typeParams: string | null): string | null
 **Responsibility**: Static Hydroscope JSON configuration
 
 **Public API**:
+
 ```typescript
 class HydroscopeConfig {
   // Edge styles
-  static getEdgeStyleConfig(): EdgeStyleConfig
-  
+  static getEdgeStyleConfig(): EdgeStyleConfig;
+
   // Node type metadata
-  static getNodeTypeConfig(): NodeTypeConfig
-  
+  static getNodeTypeConfig(): NodeTypeConfig;
+
   // Legend for visualization
-  static getLegend(): Legend
+  static getLegend(): Legend;
 }
 ```
 
 **Key Behaviors**:
+
 - All static methods (no state)
 - Returns JSON configuration for Hydroscope visualizer
 - Defines edge styles, node appearances, legend entries
@@ -1024,6 +1061,7 @@ class HydroscopeConfig {
 **Responsibility**: Single source of truth for all graph types
 
 **Exported Types**:
+
 ```typescript
 // Core graph entities
 export type NodeType = 'Source' | 'Transform' | 'Sink' | 'Join' | 'Network' | 'Tee' | 'Aggregation';
@@ -1044,6 +1082,7 @@ export interface Legend { ... }
 ```
 
 **Design Principles**:
+
 - Services import directly or narrow with `Pick<>` / `Partial<>`
 - Services can re-export type aliases for backward compatibility
 - No duplication — single definition prevents drift
@@ -1056,12 +1095,14 @@ export interface Legend { ... }
 ### Unit Tests
 
 Each service has comprehensive unit tests covering:
+
 - ✅ Happy path scenarios
 - ✅ Edge cases (empty input, malformed data)
 - ✅ Error conditions
 - ✅ Integration points (service interactions)
 
 **Coverage**:
+
 - GraphBuilder: 20 tests (chains, variables, inter-variable edges, LSP enhancement)
 - EdgeAnalyzer: 10 tests (network tagging, edge directions)
 - HierarchyBuilder: 12 tests (location grouping, code structure, collapsing)
@@ -1078,6 +1119,7 @@ Each service has comprehensive unit tests covering:
 ### Manual Testing
 
 After each phase, manual smoke tests performed:
+
 1. Open sample Hydro file (e.g., `examples/paxos.rs`)
 2. Run Quick visualization (LSPGraphExtractor path)
 3. Verify graph structure, hierarchies, and rendering
@@ -1105,25 +1147,34 @@ After each phase, manual smoke tests performed:
    - Share cache across similar scopes
    - Invalidate granularly on edits
 
-### Potential Consolidations
+### Completed Consolidations
 
-1. **Tree-sitter Usage**
-   - `TreeSitterAnalyzer` (used by GraphExtractor for colorization)
-   - `TreeSitterRustParser` (used by LSPGraphExtractor for visualization)
-   - Both parse Rust AST — could share more logic
+1. ✅ **Tree-sitter Consolidation (Oct 29, 2025)**
+   - **Before:** Two separate parsers (TreeSitterAnalyzer + TreeSitterRustParser)
+   - **After:** Single TreeSitterRustParser shared by both features
+   - **Impact:** Removed 191 lines (treeSitterAnalyzer.ts wrapper), simplified architecture
 
-2. **Deprecate GraphExtractor-first Strategy**
-   - Hover-first is more accurate (concrete types vs generics)
-   - If no users depend on GraphExtractor-first, remove it
-   - Simplify locationAnalyzer to single strategy
+2. ✅ **GraphExtractor Elimination (Oct 29, 2025)**
+   - **Problem:** GraphExtractor did expensive LSP type definition queries that were completely ignored
+   - **Root Cause:** Legacy layer from when locationAnalyzer used type definitions before hover
+   - **Solution:** locationAnalyzer now uses TreeSitterRustParser directly → LSP hover queries
+   - **Impact:** Removed 333 lines, eliminated wasteful LSP queries, cleaner architecture
+   - **Before:** locationAnalyzer → GraphExtractor (tree-sitter + LSP type defs) → throw away results → hover
+   - **After:** locationAnalyzer → TreeSitterRustParser (positions) → LSP hover (types)
 
-3. **Service Composition**
+### Future Opportunities
+
+1. **Service Composition**
    - EdgeAnalyzer and HierarchyBuilder are independent
    - Could parallelize: `Promise.all([analyzeEdges(), buildHierarchies()])`
 
+2. **Incremental Analysis**
+   - Only re-analyze changed portions of large files
+
 ---
 
-**Status**: ✅ REFACTORING COMPLETE  
+**Status**: ✅ REFACTORING COMPLETE + CONSOLIDATIONS  
 **Date**: October 29, 2025  
-**Total Effort**: Phases 1-5 complete, 224 new tests, 2,277 lines removed from orchestrator  
+**Total Effort**: Phases 1-5 + 2 major consolidations complete, 224 new tests, **2,801 lines removed** total  
+**Architecture**: Clean separation of concerns, no duplicate/wasteful code paths  
 **Next Steps**: Monitor usage in production, gather feedback for future improvements

@@ -799,79 +799,16 @@ export class LSPGraphExtractor {
   /**
    * Assign default locations to nodes that don't have LSP location information
    *
-   * This ensures all nodes get some location assignment for proper colorization,
-   * even if we don't have precise LSP type information.
+   * REMOVED: This function previously assigned fake location names like "Leader" and "Worker"
+   * which don't exist in user code. Nodes without location information now get assigned to
+   * an "(unknown location)" container during hierarchy building instead.
    *
-   * @param nodes Array of nodes to process
+   * @param _nodes Array of nodes to process (currently unused)
    */
-  private assignDefaultLocations(nodes: Node[]): void {
-    let defaultAssignmentCount = 0;
-
-    for (const node of nodes) {
-      // Skip nodes that already have location information from LSP
-      if (node.data.locationId !== null && node.data.locationType !== null) {
-        continue;
-      }
-
-      // Assign default location based on operator type and context
-      const defaultLocation = this.inferDefaultLocation(node.shortLabel);
-
-      if (defaultLocation) {
-        node.data.locationId = this.getLocationId(defaultLocation);
-        node.data.locationType = this.getLocationType(defaultLocation);
-        node.data.locationKind = defaultLocation;
-        defaultAssignmentCount++;
-
-        this.log(`Assigned default location '${defaultLocation}' to ${node.shortLabel}`);
-      }
-    }
-
-    this.log(`Assigned default locations to ${defaultAssignmentCount} nodes`);
-  }
-
-  /**
-   * Infer a reasonable default location for an operator based on its type
-   *
-   * @param operatorName The operator name
-   * @returns Default location kind or null if no reasonable default
-   */
-  private inferDefaultLocation(operatorName: string): string | null {
-    // Networking operators typically operate on clusters
-    if (this.isNetworkingOperator(operatorName)) {
-      return 'Cluster<Leader>'; // Default to leader cluster for networking
-    }
-
-    // Source operators often create data at process level
-    if (['source_iter', 'source_stream', 'singleton'].includes(operatorName)) {
-      return 'Process<Leader>'; // Default to leader process for sources
-    }
-
-    // Sink operators typically consume at process level
-    if (this.isSinkOperator(operatorName)) {
-      return 'Process<Leader>'; // Default to leader process for sinks
-    }
-
-    // Aggregation operators often work on clusters
-    if (
-      ['fold', 'reduce', 'fold_commutative', 'reduce_commutative', 'max', 'min', 'count'].includes(
-        operatorName
-      )
-    ) {
-      return 'Cluster<Worker>'; // Default to worker cluster for aggregation
-    }
-
-    // Transform operators can work anywhere, default to process
-    if (['map', 'filter', 'inspect', 'clone', 'values', 'entries', 'keys'].includes(operatorName)) {
-      return 'Process<Worker>'; // Default to worker process for transforms
-    }
-
-    // Time-based operators often work on ticks
-    if (['all_ticks', 'snapshot', 'batch', 'sample_every', 'timeout'].includes(operatorName)) {
-      return 'Tick<Process<Leader>>'; // Default to leader tick for temporal ops
-    }
-
-    // Default fallback for unknown operators
-    return 'Process<Worker>'; // Generic worker process as fallback
+  private assignDefaultLocations(_nodes: Node[]): void {
+    // No longer assign fake location names
+    // Nodes without location info will be handled by hierarchy building
+    this.log(`Skipping default location assignment - nodes without locations will be grouped as "(unknown location)"`);
   }
 
   /**

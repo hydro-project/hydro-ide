@@ -138,21 +138,23 @@ describe('Paxos Graph Extraction', () => {
     expect(hasEdge('sample_every', 'broadcast_bincode')).toBe(true);
     expect(hasEdge('broadcast_bincode', 'values')).toBe(true);
 
-    // Location hierarchy: networking ops default to Cluster<Leader> base (Leader)
+    // Location hierarchy: Without LSP data, networking ops should be in unknown location
+    // (we no longer assign fake "Leader" names)
     const locationHierarchy = hier.hierarchyChoices.find((h) => h.id === 'location') as Hierarchy;
     expect(locationHierarchy).toBeTruthy();
-    // Find base Leader container
-    const leaderRoot = locationHierarchy.children.find((c) => c.name === 'Leader');
-    expect(leaderRoot, 'Leader base container exists').toBeTruthy();
+    
+    // Find the unknown location container (since we're not providing LSP data)
+    const unknownRoot = locationHierarchy.children.find((c) => c.name === '(unknown location)');
+    expect(unknownRoot, '(unknown location) container exists when no LSP data provided').toBeTruthy();
 
     const assigned = hier.nodeAssignments.location;
-    // All networking nodes should be assigned under the Leader subtree (root or tick children)
+    // All networking nodes should be assigned under the unknown location tree
     for (const n of [...broadcastNodes, ...demuxNodes]) {
       const cid = assigned[n.id];
       expect(cid, `assignment for ${n.shortLabel}`).toBeTruthy();
-      // Either assigned directly to Leader or to a child under Leader
+      // Either assigned directly to unknown or to a child under unknown
       // Walk to verify ancestry
-      const root = leaderRoot as HierarchyContainer;
+      const root = unknownRoot as HierarchyContainer;
       const contains = (nodeId: string) => {
         const stack: HierarchyContainer[] = [root];
         while (stack.length) {

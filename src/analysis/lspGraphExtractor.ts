@@ -179,6 +179,7 @@ export class LSPGraphExtractor {
   private cacheMisses: number;
   private treeSitterParser: TreeSitterRustParser;
   private graphBuilder: GraphBuilder;
+  private operatorRegistry: OperatorRegistry;
 
   /**
    * Create a new LSP Graph Extractor
@@ -193,9 +194,9 @@ export class LSPGraphExtractor {
     this.cacheMisses = 0;
     this.treeSitterParser = new TreeSitterRustParser(outputChannel);
     
-    // Initialize GraphBuilder with dependencies
-    const operatorRegistry = OperatorRegistry.getInstance();
-    this.graphBuilder = new GraphBuilder(this.treeSitterParser, operatorRegistry, outputChannel);
+    // Initialize services
+    this.operatorRegistry = OperatorRegistry.getInstance();
+    this.graphBuilder = new GraphBuilder(this.treeSitterParser, this.operatorRegistry, outputChannel);
 
     // Initialize the locationAnalyzer module with the output channel
     locationAnalyzer.initialize(outputChannel);
@@ -564,7 +565,7 @@ export class LSPGraphExtractor {
       const returnType = location.fullReturnType || location.locationType;
       
       // Check if this is a valid dataflow operator
-      if (!this.isValidDataflowOperator(location.operatorName, returnType)) {
+      if (!this.operatorRegistry.isValidDataflowOperator(location.operatorName, returnType)) {
         this.log(
           `Filtered out ${location.operatorName} - not a dataflow operator (return type: ${returnType || 'unknown'})`
         );
@@ -609,7 +610,7 @@ export class LSPGraphExtractor {
       }
 
       // Check if this is a known dataflow operator
-      if (!this.isKnownDataflowOperator(tsOp.name)) {
+      if (!this.operatorRegistry.isKnownDataflowOperator(tsOp.name)) {
         continue;
       }
 
@@ -907,7 +908,7 @@ export class LSPGraphExtractor {
 
     if (!bestMatch) {
       // Fallback 3: Create synthetic location info for known operators without LSP data
-      if (this.isKnownDataflowOperator(tsOp.name)) {
+      if (this.operatorRegistry.isKnownDataflowOperator(tsOp.name)) {
         this.log(
           `[findOperatorInfo] Creating synthetic location for known operator ${tsOp.name} at line ${tsOp.line}`
         );
@@ -940,7 +941,7 @@ export class LSPGraphExtractor {
 
     if (!node) {
       // For synthetic locations, we need to create a synthetic node
-      if (bestMatch && !bestMatch.locationKind && this.isKnownDataflowOperator(tsOp.name)) {
+      if (bestMatch && !bestMatch.locationKind && this.operatorRegistry.isKnownDataflowOperator(tsOp.name)) {
         this.log(
           `[findOperatorInfo] Creating synthetic node for ${tsOp.name} at line ${tsOp.line}`
         );
@@ -969,7 +970,7 @@ export class LSPGraphExtractor {
 
     // Skip location constructors (they don't produce dataflow)
     // Only include Hydro dataflow operators
-    if (returnType && !this.isValidDataflowOperator(tsOp.name, returnType)) {
+    if (returnType && !this.operatorRegistry.isValidDataflowOperator(tsOp.name, returnType)) {
       this.log(
         `[findOperatorInfo] Filtered out ${tsOp.name} at line ${tsOp.line} - non-dataflow type: ${returnType}`
       );
@@ -978,7 +979,7 @@ export class LSPGraphExtractor {
 
     // If no return type is available, check if it's a known dataflow operator
     if (!returnType) {
-      if (this.isKnownDataflowOperator(tsOp.name)) {
+      if (this.operatorRegistry.isKnownDataflowOperator(tsOp.name)) {
         this.log(
           `[findOperatorInfo] No return type for ${tsOp.name} at line ${tsOp.line}, but it's a known dataflow operator - including`
         );
@@ -1268,7 +1269,7 @@ export class LSPGraphExtractor {
           const returnType = loc.fullReturnType || null;
 
           // Skip operators that are not valid dataflow operators
-          if (returnType && !this.isValidDataflowOperator(loc.operatorName, returnType)) {
+          if (returnType && !this.operatorRegistry.isValidDataflowOperator(loc.operatorName, returnType)) {
             this.log(
               `[buildOperatorChains] Filtered out ${loc.operatorName} - not a dataflow operator (return type: ${returnType})`
             );
@@ -2129,225 +2130,11 @@ export class LSPGraphExtractor {
    * This filtering is based on the canonical HydroNode IR definitions and includes
    * networking operators that are essential parts of Hydro dataflow pipelines.
    */
-  private isValidDataflowOperator(operatorName: string, returnType: string | null): boolean {
-    // If no return type available, use name-based heuristics for known dataflow operators
-    if (!returnType) {
-      return this.isKnownDataflowOperator(operatorName);
-    }
 
-    // Accept operators that return live collection types (canonical Hydro collections)
-    // This includes networking operators like broadcast_bincode that return Stream<T, Cluster<...>, ...>
-    const config = this.getOperatorConfig();
-    if (
-      config.collectionTypes.some((collectionType: string) => returnType.includes(collectionType))
-    ) {
-      return true;
-    }
 
-    // Accept sink operators that return unit type ()
-    // If return type is strictly unit, accept regardless of operator name (common pattern like `collect`)
-    if (returnType.trim() === '()') {
-      return true;
-    }
-    if (returnType.includes('()') && this.isSinkOperator(operatorName)) {
-      return true;
-    }
 
-    // Accept operators that return impl Into<Collection> (common Hydro pattern)
-    if (
-      returnType.includes('impl Into<') &&
-      config.collectionTypes.some((collectionType: string) =>
-        returnType.includes(collectionType.replace('<', ''))
-      )
-    ) {
-      return true;
-    }
 
-    // Special case: Accept networking operators even if LSP returns incomplete type info
-    // These are crucial parts of Hydro distributed dataflow pipelines
-    if (this.isNetworkingOperator(operatorName)) {
-      this.log(
-        `Accepting networking operator ${operatorName} despite incomplete type info: ${returnType || 'null'}`
-      );
-      return true;
-    }
 
-    // Reject pure infrastructure operators that only return location types without collections
-    // But be careful not to reject networking operators that might have incomplete type info
-    if (
-      returnType.includes('Process<') ||
-      returnType.includes('Cluster<') ||
-      returnType.includes('Tick<') ||
-      returnType.includes('Atomic<')
-    ) {
-      // Double-check: if it's a known networking operator, accept it anyway
-      if (this.isNetworkingOperator(operatorName)) {
-        this.log(
-          `Accepting networking operator ${operatorName} despite location-type return: ${returnType}`
-        );
-        return true;
-      }
-      return false;
-    }
-
-    // Fallback to name-based heuristics for edge cases
-    return this.isKnownDataflowOperator(operatorName);
-  }
-
-  /**
-   * Get the current operator configuration from VS Code settings
-   *
-   * Reads operator lists from hydroIde.operators.* settings.
-   * Defaults are defined in package.json and applied by VS Code.
-   * In test environments without VS Code, returns package.json defaults.
-   */
-  private getOperatorConfig() {
-    try {
-      const config = vscode.workspace.getConfiguration('hydroIde.operators');
-      return {
-        networkingOperators: config.get<string[]>('networkingOperators', []),
-        coreDataflowOperators: config.get<string[]>('coreDataflowOperators', []),
-        sinkOperators: config.get<string[]>('sinkOperators', []),
-        collectionTypes: config.get<string[]>('collectionTypes', []),
-      };
-    } catch {
-      // Fallback for unit test environment (package.json defaults)
-      return {
-        networkingOperators: [
-          'send_bincode',
-          'recv_bincode',
-          'broadcast_bincode',
-          'demux_bincode',
-          'round_robin_bincode',
-          'send_bincode_external',
-          'recv_bincode_external',
-          'send_bytes',
-          'recv_bytes',
-          'broadcast_bytes',
-          'demux_bytes',
-          'send_bytes_external',
-          'recv_bytes_external',
-          'connect',
-          'disconnect',
-        ],
-        coreDataflowOperators: [
-          'map',
-          'flat_map',
-          'filter',
-          'filter_map',
-          'scan',
-          'enumerate',
-          'inspect',
-          'unique',
-          'sort',
-          'fold',
-          'reduce',
-          'fold_keyed',
-          'reduce_keyed',
-          'reduce_watermark_commutative',
-          'fold_commutative',
-          'reduce_commutative',
-          'fold_early_stop',
-          'into_singleton',
-          'into_stream',
-          'into_keyed',
-          'keys',
-          'values',
-          'entries',
-          'collect_vec',
-          'collect_ready',
-          'all_ticks',
-          'all_ticks_atomic',
-          'join',
-          'cross_product',
-          'cross_singleton',
-          'difference',
-          'anti_join',
-          'chain',
-          'chain_first',
-          'union',
-          'concat',
-          'zip',
-          'defer_tick',
-          'persist',
-          'snapshot',
-          'snapshot_atomic',
-          'sample_every',
-          'sample_eager',
-          'timeout',
-          'batch',
-          'yield_concat',
-          'source_iter',
-          'source_stream',
-          'source_stdin',
-          'for_each',
-          'dest_sink',
-          'assert',
-          'assert_eq',
-          'dest_file',
-          'tee',
-          'clone',
-          'unwrap',
-          'unwrap_or',
-          'filter_if_some',
-          'filter_if_none',
-          'resolve_futures',
-          'resolve_futures_ordered',
-          'tick',
-          'atomic',
-          'complete',
-          'complete_next_tick',
-          'first',
-          'last',
-        ],
-        sinkOperators: ['for_each', 'dest_sink', 'assert', 'assert_eq', 'dest_file'],
-        collectionTypes: ['Stream<', 'Singleton<', 'Optional<', 'KeyedStream<', 'KeyedSingleton<'],
-      };
-    }
-  }
-
-  /**
-   * Check if an operator is a networking operator
-   *
-   * Networking operators are essential parts of Hydro distributed dataflow pipelines
-   * that handle communication between different locations (processes, clusters).
-   */
-  private isNetworkingOperator(operatorName: string): boolean {
-    const config = this.getOperatorConfig();
-    return config.networkingOperators.includes(operatorName);
-  }
-
-  /**
-   * Check if an operator is a known dataflow operator based on its name
-   *
-   * This is based on the canonical HydroNode IR definitions and actual operator
-   * implementations in the Hydro codebase. Includes both core dataflow operators
-   * and networking operators that are essential parts of distributed pipelines.
-   */
-  private isKnownDataflowOperator(operatorName: string): boolean {
-    // Check networking operators first
-    if (this.isNetworkingOperator(operatorName)) {
-      return true;
-    }
-
-    // Check core dataflow operators from configuration
-    const config = this.getOperatorConfig();
-    return config.coreDataflowOperators.includes(operatorName);
-  }
-
-  /**
-   * Check if an operator is a sink operator that consumes live collections
-   *
-   * Sink operators are identified by their signature:
-   * - Return unit type ()
-   * - Take a live collection as self parameter
-   *
-   * This method uses the configuration to identify known sink operators.
-   */
-  private isSinkOperator(operatorName: string): boolean {
-    const config = this.getOperatorConfig();
-    return config.sinkOperators.includes(operatorName);
-  }
 
   /**
    * Extract location type from location kind string
@@ -2393,8 +2180,8 @@ export class LSPGraphExtractor {
         return edge; // Skip if nodes not found
       }
 
-      const sourceIsNetwork = this.isNetworkingOperator(sourceNode.shortLabel);
-      const targetIsNetwork = this.isNetworkingOperator(targetNode.shortLabel);
+      const sourceIsNetwork = this.operatorRegistry.isNetworkingOperator(sourceNode.shortLabel);
+      const targetIsNetwork = this.operatorRegistry.isNetworkingOperator(targetNode.shortLabel);
 
       if (sourceIsNetwork || targetIsNetwork) {
         // This is a network edge

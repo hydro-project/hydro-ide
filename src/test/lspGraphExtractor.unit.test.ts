@@ -98,12 +98,14 @@ describe('LSP Graph Extractor Unit Tests', () => {
       ];
 
       for (const testCase of testCases) {
-        // Access the private method for testing
+        // Use OperatorRegistry directly (Phase 3.2: method moved to service)
         const result = (
           extractor as unknown as {
-            isValidDataflowOperator: (name: string, returnType: string | null) => boolean;
+            operatorRegistry: {
+              isValidDataflowOperator: (name: string, returnType: string | null) => boolean;
+            };
           }
-        ).isValidDataflowOperator(testCase.operatorName, testCase.returnType);
+        ).operatorRegistry.isValidDataflowOperator(testCase.operatorName, testCase.returnType);
         expect(
           result,
           `${testCase.operatorName} with return type "${testCase.returnType}" should ${testCase.expected ? 'be included' : 'be excluded'}`
@@ -116,9 +118,11 @@ describe('LSP Graph Extractor Unit Tests', () => {
       // (this is the conservative approach - let it through and let other validation handle it)
       const result = (
         extractor as unknown as {
-          isValidDataflowOperator: (name: string, returnType: string | null) => boolean;
+          operatorRegistry: {
+            isValidDataflowOperator: (name: string, returnType: string | null) => boolean;
+          };
         }
-      ).isValidDataflowOperator('unknown_operator', null);
+      ).operatorRegistry.isValidDataflowOperator('unknown_operator', null);
       expect(result).toBe(false); // null return type should return false, but the calling code allows it through
     });
 
@@ -133,9 +137,11 @@ describe('LSP Graph Extractor Unit Tests', () => {
       for (const testCase of testCases) {
         const result = (
           extractor as unknown as {
-            isValidDataflowOperator: (name: string, returnType: string | null) => boolean;
+            operatorRegistry: {
+              isValidDataflowOperator: (name: string, returnType: string | null) => boolean;
+            };
           }
-        ).isValidDataflowOperator(testCase.operatorName, testCase.returnType);
+        ).operatorRegistry.isValidDataflowOperator(testCase.operatorName, testCase.returnType);
         expect(
           result,
           `${testCase.operatorName} with return type "${testCase.returnType}" should ${testCase.expected ? 'be included' : 'be excluded'}`

@@ -408,16 +408,22 @@ fn ht_build<'a>(
 
       // Should find the ops.filter... chain (implicit return)
       expect(chains.length).toBeGreaterThanOrEqual(1);
-      
-      const mainChain = chains.find((chain: { some: (arg0: (op: any) => boolean) => any; }) => 
-        chain.some((op: { name: string; }) => op.name === 'filter') &&
-        chain.some((op: { name: string; }) => op.name === 'into_keyed') &&
-        chain.some((op: { name: string; }) => op.name === 'fold')
+
+      const mainChain = chains.find(
+        (chain: { some: (arg0: (op: any) => boolean) => any }) =>
+          chain.some((op: { name: string }) => op.name === 'filter') &&
+          chain.some((op: { name: string }) => op.name === 'into_keyed') &&
+          chain.some((op: { name: string }) => op.name === 'fold')
       );
-      
+
       expect(mainChain, 'Should find the main ops.filter...fold chain').toBeDefined();
       expect(mainChain?.length).toBe(4);
-      expect(mainChain?.map((op: { name: any; }) => op.name)).toEqual(['filter', 'map', 'into_keyed', 'fold']);
+      expect(mainChain?.map((op: { name: any }) => op.name)).toEqual([
+        'filter',
+        'map',
+        'into_keyed',
+        'fold',
+      ]);
     });
 
     it('should extract chains passed as function arguments', () => {
@@ -443,25 +449,26 @@ fn local_kvs<'a>(
       const doc = createMockDocument(code);
       const bindings = parser.parseVariableBindings(doc);
       const chains = parser.parseStandaloneChains(doc);
-      const allChains = [...bindings.flatMap((b: { operators: any; }) => [b.operators]), ...chains];
+      const allChains = [...bindings.flatMap((b: { operators: any }) => [b.operators]), ...chains];
 
       // Should find operations.clone() in ht_build argument
-      const cloneInHtBuild = allChains.find((chain: any[]) =>
-        chain.length === 1 && chain[0].name === 'clone'
+      const cloneInHtBuild = allChains.find(
+        (chain: any[]) => chain.length === 1 && chain[0].name === 'clone'
       );
       expect(cloneInHtBuild, 'Should find operations.clone() passed to ht_build').toBeDefined();
 
       // Should find operations.clone().batch(...) in batch_gets argument
-      const cloneBatchChain = allChains.find((chain: { some: (arg0: (op: any) => boolean) => any; }) =>
-        chain.some((op: { name: string; }) => op.name === 'clone') &&
-        chain.some((op: { name: string; }) => op.name === 'batch')
+      const cloneBatchChain = allChains.find(
+        (chain: { some: (arg0: (op: any) => boolean) => any }) =>
+          chain.some((op: { name: string }) => op.name === 'clone') &&
+          chain.some((op: { name: string }) => op.name === 'batch')
       );
       expect(cloneBatchChain, 'Should find operations.clone().batch(...) chain').toBeDefined();
-      expect(cloneBatchChain?.map((op: { name: any; }) => op.name)).toEqual(['clone', 'batch']);
+      expect(cloneBatchChain?.map((op: { name: any }) => op.name)).toEqual(['clone', 'batch']);
 
       // Should find ht.snapshot(...) in query argument
-      const snapshotChain = allChains.find((chain: any[]) =>
-        chain.length === 1 && chain[0].name === 'snapshot'
+      const snapshotChain = allChains.find(
+        (chain: any[]) => chain.length === 1 && chain[0].name === 'snapshot'
       );
       expect(snapshotChain, 'Should find ht.snapshot(...) passed to ht_query').toBeDefined();
     });
@@ -479,15 +486,16 @@ fn example() {
       const chains = parser.parseStandaloneChains(doc);
 
       // Should find the operations.batch().all_ticks() chain
-      const mainChain = chains.find((chain: { some: (arg0: (op: any) => boolean) => any; }) =>
-        chain.some((op: { name: string; }) => op.name === 'batch') &&
-        chain.some((op: { name: string; }) => op.name === 'all_ticks')
+      const mainChain = chains.find(
+        (chain: { some: (arg0: (op: any) => boolean) => any }) =>
+          chain.some((op: { name: string }) => op.name === 'batch') &&
+          chain.some((op: { name: string }) => op.name === 'all_ticks')
       );
       expect(mainChain, 'Should find main batch...all_ticks chain').toBeDefined();
 
       // Should NOT find process.tick() as a separate chain (it's inside batch's arguments)
-      const tickChain = chains.find((chain: any[]) =>
-        chain.length === 1 && chain[0].name === 'tick'
+      const tickChain = chains.find(
+        (chain: any[]) => chain.length === 1 && chain[0].name === 'tick'
       );
       expect(tickChain, 'Should NOT find process.tick() as separate chain').toBeUndefined();
     });
@@ -507,13 +515,13 @@ fn local_kvs<'a>(
       const doc = createMockDocument(code);
       const chains = parser.parseStandaloneChains(doc);
 
-      const batchChain = chains.find((chain: { some: (arg0: (op: any) => boolean) => any; }) =>
-        chain.some((op: { name: string; }) => op.name === 'batch')
+      const batchChain = chains.find((chain: { some: (arg0: (op: any) => boolean) => any }) =>
+        chain.some((op: { name: string }) => op.name === 'batch')
       );
-      
+
       expect(batchChain, 'Should find batch chain').toBeDefined();
-      
-      const batchOp = batchChain?.find((op: { name: string; }) => op.name === 'batch');
+
+      const batchOp = batchChain?.find((op: { name: string }) => op.name === 'batch');
       expect(batchOp?.tickVariable, 'batch operator should have tickVariable').toBe('ticker');
     });
   });
@@ -555,4 +563,3 @@ function createMockDocument(code: string): vscode.TextDocument {
     fileName: 'test.rs',
   } as vscode.TextDocument;
 }
-

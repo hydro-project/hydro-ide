@@ -334,6 +334,75 @@ export class LSPAnalyzer {
   }
 
   /**
+   * Colorize variable names based on the location type of their assigned operator chains
+   *
+   * @param document The document being analyzed
+   * @param operatorResults LocationInfo results from operator analysis
+   * @param variableBindings Pre-parsed variable bindings from tree-sitter (avoids re-parsing)
+   * @returns Additional LocationInfo entries for variable names
+   */
+  public colorizeVariables(
+    document: vscode.TextDocument,
+    operatorResults: LocationInfo[],
+    variableBindings: Array<{
+      variableName: string;
+      line: number;
+      operators: Array<{ name: string; line: number; column: number }>;
+    }>
+  ): LocationInfo[] {
+    const results: LocationInfo[] = [];
+
+    try {
+      const bindings = variableBindings;
+      this.log(`Found ${bindings.length} variable bindings for colorization`);
+
+      for (const binding of bindings) {
+        if (binding.operators.length === 0) continue;
+
+        // Get the last operator in the chain
+        const lastOperator = binding.operators[binding.operators.length - 1];
+
+        // Find the location info for this operator
+        const operatorLocation = operatorResults.find(
+          (loc) =>
+            loc.range.start.line === lastOperator.line &&
+            Math.abs(loc.range.start.character - lastOperator.column) < 5 && // Allow small variance
+            loc.operatorName === lastOperator.name
+        );
+
+        if (operatorLocation && operatorLocation.locationKind) {
+          // Create a LocationInfo for the variable name
+          // The variable name is at the start of the let statement
+          const lineText = document.lineAt(binding.line).text;
+          const letMatch = lineText.match(/let\s+(\w+)/);
+          if (letMatch) {
+            const varNameStart = lineText.indexOf(letMatch[1]);
+            const varNameEnd = varNameStart + letMatch[1].length;
+
+            results.push({
+              locationType: operatorLocation.locationType,
+              locationKind: operatorLocation.locationKind,
+              range: new vscode.Range(binding.line, varNameStart, binding.line, varNameEnd),
+              operatorName: binding.variableName,
+              fullReturnType: operatorLocation.fullReturnType,
+            });
+
+            this.log(
+              `Colorized variable '${binding.variableName}' with location '${operatorLocation.locationKind}'`
+            );
+          }
+        }
+      }
+
+      this.log(`Added ${results.length} variable colorizations`);
+    } catch (error) {
+      this.log(`WARNING: Error colorizing variables: ${error}`);
+    }
+
+    return results;
+  }
+
+  /**
    * Find and add struct definition identifiers that correspond to location type parameters
    * This mirrors older behavior that highlighted the struct name used in Process<Struct>
    */

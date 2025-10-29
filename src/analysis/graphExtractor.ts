@@ -14,7 +14,7 @@
  */
 
 import * as vscode from 'vscode';
-import { TreeSitterAnalyzer, OperatorCall } from './treeSitterAnalyzer';
+import { TreeSitterAnalyzer, OperatorCall, VariableBinding } from './treeSitterAnalyzer';
 import { LSPAnalyzer, LocationInfo, CacheStats } from './lspAnalyzer';
 import { ScopeTarget } from '../core/types';
 
@@ -38,6 +38,8 @@ export interface GraphExtractionResult {
   unmatchedTreeSitterOperators: OperatorCall[];
   /** Identifiers found by LSP but not matched with tree-sitter */
   unmatchedLSPIdentifiers: LocationInfo[];
+  /** Variable bindings from tree-sitter for variable colorization */
+  variableBindings: VariableBinding[];
 }
 
 /**
@@ -152,6 +154,7 @@ export class GraphExtractor {
       matchedOperators,
       unmatchedTreeSitterOperators: rejectedOperators,
       unmatchedLSPIdentifiers: [], // No unmatched LSP identifiers in this approach
+      variableBindings: treeSitterResult.variableBindings,
     };
   }
 

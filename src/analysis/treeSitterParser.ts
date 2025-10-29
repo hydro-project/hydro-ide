@@ -128,7 +128,7 @@ export class TreeSitterRustParser {
 
     this.log(`Parsing standalone chains with tree-sitter: ${document.fileName}`);
 
-    // Walk the AST to find expression statements that are method chains
+    // Walk the AST to find expression statements, return expressions, and other contexts with method chains
     this.walkTree(tree.rootNode, (node) => {
       // Look for expression_statement nodes that contain method chains
       if (node.type === 'expression_statement') {
@@ -144,6 +144,25 @@ export class TreeSitterRustParser {
             chains.push(operators);
             this.log(
               `Found standalone chain with ${operators.length} operators: [${operators.map((op) => op.name).join(', ')}]`
+            );
+          }
+        }
+      }
+
+      // Also look for return expressions with method chains
+      if (node.type === 'return_expression') {
+        // The return expression should have a child that is the returned value
+        const returnValue = node.children.find(
+          (child: SyntaxNode) =>
+            child.type === 'call_expression' || child.type === 'field_expression'
+        );
+
+        if (returnValue) {
+          const operators = this.extractOperatorChain(returnValue);
+          if (operators.length > 0) {
+            chains.push(operators);
+            this.log(
+              `Found return chain with ${operators.length} operators: [${operators.map((op) => op.name).join(', ')}]`
             );
           }
         }
@@ -322,11 +341,11 @@ export class TreeSitterRustParser {
       if (method) {
         this.extractFromMainChain(method, operators);
       }
-      
+
       // Also check if the receiver is another call_expression (chained method calls)
       // This handles cases like: parsed_requests.clone().filter_map(...)
-      const receiver = node.children.find((child: SyntaxNode) => 
-        child.type === 'call_expression' || child.type === 'field_expression'
+      const receiver = node.children.find(
+        (child: SyntaxNode) => child.type === 'call_expression' || child.type === 'field_expression'
       );
       if (receiver && receiver !== method) {
         this.extractFromMainChain(receiver, operators);

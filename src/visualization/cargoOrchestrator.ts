@@ -254,6 +254,10 @@ export class CargoOrchestrator {
     const allImports = functions.map((func) =>
       this.generateFunctionImport(func, crateName, target.cargoTomlPath!)
     );
+    // Add Location trait import for source_iter and other methods
+    allImports.push('use hydro_lang::location::Location;');
+    // Add q! macro for quoting expressions
+    allImports.push('use hydro_lang::prelude::q;');
     const uniqueImports = [...new Set(allImports)];
     const imports = uniqueImports.join('\n');
 
@@ -338,8 +342,9 @@ ${testBodies.join('\n\n')}
     const { declarations, callArgs } = this.generateParameterCode(parameters);
 
     // Generate the call to the function
+    // Capture the return value to ensure operators are included in the graph
     const functionCall =
-      callArgs.length > 0 ? `${func.name}(${callArgs.join(', ')});` : `${func.name}();`;
+      callArgs.length > 0 ? `${func.name}(${callArgs.join(', ')})` : `${func.name}()`;
 
     return `
     // Visualize function: ${func.name}
@@ -351,7 +356,13 @@ ${testBodies.join('\n\n')}
 ${declarations}
         
         eprintln!("[DEBUG] Step 3: Calling function ${func.name}");
-        ${functionCall}
+        let result = ${functionCall};
+        
+        eprintln!("[DEBUG] Step 3.5: Adding sink to force graph inclusion");
+        // Force the result into the graph by adding a for_each sink
+        // For KeyedStream, convert to Stream first with .values()
+        // Use explicit method call to avoid Iterator trait ambiguity
+        hydro_lang::live_collections::stream::Stream::for_each(result.values(), q!(|_| {}));
         
         eprintln!("[DEBUG] Step 4: Finalizing builder");
         let built = flow.finalize();
@@ -434,8 +445,12 @@ ${declarations}
     const declarations: string[] = [];
     const callArgs: string[] = [];
 
+    // Track created locations to reuse them across parameters
+    // Maps location type (process/cluster) to the variable name
+    const createdLocations: Map<string, string> = new Map();
+
     for (const param of parameters) {
-      const { declaration, callArg } = this.generateParameterForType(param);
+      const { declaration, callArg } = this.generateParameterForType(param, createdLocations);
       if (declaration) {
         declarations.push(`        ${declaration}`);
       }
@@ -451,7 +466,10 @@ ${declarations}
   /**
    * Generate code for a single parameter based on its type
    */
-  private generateParameterForType(param: RustParameter): {
+  private generateParameterForType(
+    param: RustParameter,
+    createdLocations: Map<string, string>
+  ): {
     declaration: string | null;
     callArg: string;
   } {
@@ -465,19 +483,84 @@ ${declarations}
       };
     }
 
+    // Detect Stream/KeyedStream parameter (non-reference)
+    // These are live collection types that need to be created from a source
+    if (
+      !paramType.startsWith('&') &&
+      (paramType.includes('Stream<') ||
+        paramType.includes('KeyedStream<') ||
+        paramType.includes('Singleton<'))
+    ) {
+      // Extract the location type from the collection type
+      // e.g., KeyedStream<K, V, Process<'a, P>, ...> -> Process
+      let locationType = 'process'; // default
+      if (paramType.includes('Cluster<')) {
+        locationType = 'cluster';
+      }
+
+      // Check if we already created this location type
+      let locationVar = createdLocations.get(locationType);
+      let locationDeclaration = '';
+
+      if (!locationVar) {
+        // Create new location and track it
+        locationVar = `${param.name}_loc`;
+        createdLocations.set(locationType, locationVar);
+        // Use turbofish with () to specify the tag type parameter
+        locationDeclaration = `let ${locationVar} = flow.${locationType}::<()>();\n        `;
+      }
+
+      // Determine if we need to convert to keyed stream
+      const needsKeyed = paramType.includes('KeyedStream<');
+      const keyedConversion = needsKeyed ? '.into_keyed()' : '';
+
+      // Create an empty source on the location
+      // Use q!(vec![]) to quote the vector for Hydro
+      return {
+        declaration: `${locationDeclaration}let ${param.name} = ${locationVar}.source_iter(q!(vec![]))${keyedConversion};`,
+        callArg: param.name, // No & because it's not a reference parameter
+      };
+    }
+
     // Detect Process parameter: &Process<'a> or &Process<'_, T> etc.
     if (paramType.includes('Process')) {
+      // Check if we already created a process location (e.g., for a Stream parameter)
+      const existingProcess = createdLocations.get('process');
+      if (existingProcess) {
+        // Reuse existing process location
+        return {
+          declaration: null,
+          callArg: `&${existingProcess}`,
+        };
+      }
+
+      // Create new process location and track it
+      const locationVar = param.name;
+      createdLocations.set('process', locationVar);
       return {
-        declaration: `let ${param.name} = flow.process();`,
-        callArg: `&${param.name}`,
+        declaration: `let ${locationVar} = flow.process::<()>();`,
+        callArg: `&${locationVar}`,
       };
     }
 
     // Detect Cluster parameter: &Cluster<'a> or &Cluster<'_, T> etc.
     if (paramType.includes('Cluster')) {
+      // Check if we already created a cluster location
+      const existingCluster = createdLocations.get('cluster');
+      if (existingCluster) {
+        // Reuse existing cluster location
+        return {
+          declaration: null,
+          callArg: `&${existingCluster}`,
+        };
+      }
+
+      // Create new cluster location and track it
+      const locationVar = param.name;
+      createdLocations.set('cluster', locationVar);
       return {
-        declaration: `let ${param.name} = flow.cluster();`,
-        callArg: `&${param.name}`,
+        declaration: `let ${locationVar} = flow.cluster::<()>();`,
+        callArg: `&${locationVar}`,
       };
     }
 

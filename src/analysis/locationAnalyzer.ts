@@ -90,7 +90,14 @@ export async function analyzeDocument(document: vscode.TextDocument): Promise<Lo
     // Step 2: Query hover at each position to get concrete types
     const hoverResults = await lspAnalyzer.analyzePositions(document, allPositions);
 
-    return hoverResults;
+    // Step 3: Colorize variables based on their operator chains
+    const variableResults = lspAnalyzer.colorizeVariables(
+      document,
+      hoverResults,
+      result.variableBindings
+    );
+
+    return [...hoverResults, ...variableResults];
   } else {
     // GRAPHEXTRACTOR-FIRST STRATEGY (legacy): Use LSP type definitions first
     // This may return generic types; hover is used as fallback for unmatched operators.

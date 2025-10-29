@@ -55,6 +55,8 @@ export interface OperatorNode {
   endLine: number;
   /** End column number (0-indexed) */
   endColumn: number;
+  /** Tick variable name for temporal operators (e.g., "ticker", "t") */
+  tickVariable?: string;
 }
 
 /**
@@ -332,14 +334,47 @@ export class TreeSitterRustParser {
   }
 
   /**
-   * Extract operators only from the main method chain, not from arguments
+   * Extract operators from the main method chain and tick variables for temporal operators
    */
   private extractFromMainChain(node: SyntaxNode, operators: OperatorNode[]): void {
     if (node.type === 'call_expression') {
-      // This is a method call - extract from the method part, but skip arguments
+      // This is a method call - extract from the method part and check for tick arguments
       const method = node.children.find((child: SyntaxNode) => child.type === 'field_expression');
       if (method) {
-        this.extractFromMainChain(method, operators);
+        // Get the operator name first
+        const fieldIdentifier = method.children.find(
+          (child: SyntaxNode) => child.type === 'field_identifier'
+        );
+        
+        if (fieldIdentifier) {
+          const operatorName = fieldIdentifier.text;
+          
+          // Check if this is a temporal operator that takes a tick argument
+          const temporalOperators = ['batch', 'snapshot', 'snapshot_atomic', 'sample_every', 'timeout'];
+          let tickVariable: string | undefined;
+          
+          if (temporalOperators.includes(operatorName)) {
+            // Extract the first argument (tick variable)
+            tickVariable = this.extractFirstArgument(node);
+          }
+          
+          operators.push({
+            name: operatorName,
+            line: fieldIdentifier.startPosition.row,
+            column: fieldIdentifier.startPosition.column,
+            endLine: fieldIdentifier.endPosition.row,
+            endColumn: fieldIdentifier.endPosition.column,
+            tickVariable,
+          });
+        }
+        
+        // Continue with the receiver chain
+        const receiver = method.children.find(
+          (child: SyntaxNode) => child.type !== 'field_identifier' && child.type !== '.'
+        );
+        if (receiver) {
+          this.extractFromMainChain(receiver, operators);
+        }
       }
 
       // Also check if the receiver is another call_expression (chained method calls)
@@ -351,7 +386,7 @@ export class TreeSitterRustParser {
         this.extractFromMainChain(receiver, operators);
       }
     } else if (node.type === 'field_expression') {
-      // This is a method call in the main chain
+      // This is a field access without a call - shouldn't happen in chains but handle it
       const fieldIdentifier = node.children.find(
         (child: SyntaxNode) => child.type === 'field_identifier'
       );
@@ -376,6 +411,45 @@ export class TreeSitterRustParser {
       }
     }
     // For other node types (like identifier), stop recursion to avoid picking up arguments
+  }
+
+  /**
+   * Extract the first argument from a call_expression node
+   * Used to get tick variable from temporal operators like batch(ticker, ...)
+   * 
+   * @param callNode The call_expression node
+   * @returns The tick variable name (e.g., "ticker", "t") or undefined
+   */
+  private extractFirstArgument(callNode: SyntaxNode): string | undefined {
+    // Find the arguments node
+    const argsNode = callNode.children.find((child: SyntaxNode) => child.type === 'arguments');
+    if (!argsNode) return undefined;
+    
+    // Get the first argument
+    for (const child of argsNode.children) {
+      // Skip punctuation like '(' and ','
+      if (child.type === '(' || child.type === ')' || child.type === ',') {
+        continue;
+      }
+      
+      // Handle direct identifier: batch(ticker, ...)
+      if (child.type === 'identifier') {
+        return child.text;
+      }
+      
+      // Handle reference: batch(&ticker, ...)
+      if (child.type === 'reference_expression' || child.type === 'unary_expression') {
+        const identifier = child.children.find((c: SyntaxNode) => c.type === 'identifier');
+        if (identifier) {
+          return identifier.text;
+        }
+      }
+      
+      // Found a non-identifier first arg, return undefined
+      return undefined;
+    }
+    
+    return undefined;
   }
 
   /**

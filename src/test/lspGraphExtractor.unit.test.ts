@@ -200,22 +200,22 @@ describe('LSP Graph Extractor Unit Tests', () => {
   });
 
   describe('Hierarchy Construction', () => {
-    it('Location: nests Tick levels and splits same-tick disconnected subgraphs', () => {
+    it('Location: nests Tick levels and groups by tick variable', () => {
       const doc = createMockDocument('');
 
-      // Create nodes across depths for base label Worker
+      // Create nodes across depths for base label Worker, with different tick variables
       const nodes = [
         // depth 0 (base)
         mkNode('a', 'map', 'Process<Worker>'),
         mkNode('b', 'filter', 'Process<Worker>'),
-        // depth 1 (Tick<...>)
-        mkNode('c', 'reduce', 'Tick<Process<Worker>>'),
-        mkNode('d', 'fold', 'Tick<Process<Worker>>'),
-        // depth 2 (Tick<Tick<...>>)
-        mkNode('e', 'inspect', 'Tick<Tick<Process<Worker>>>'),
+        // depth 1 (Tick<...>) - different tick variables
+        { ...mkNode('c', 'reduce', 'Tick<Process<Worker>>'), data: { ...mkNode('c', 'reduce', 'Tick<Process<Worker>>').data, tickVariable: 'ticker1' } },
+        { ...mkNode('d', 'fold', 'Tick<Process<Worker>>'), data: { ...mkNode('d', 'fold', 'Tick<Process<Worker>>').data, tickVariable: 'ticker2' } },
+        // depth 2 (Tick<Tick<...>>) - uses same tick variable as c
+        { ...mkNode('e', 'inspect', 'Tick<Tick<Process<Worker>>>'), data: { ...mkNode('e', 'inspect', 'Tick<Tick<Process<Worker>>>').data, tickVariable: 'ticker1' } },
       ];
 
-      // Edges: a->c, b->d, c->e (so c & e are connected; d is separate at depth>=1)
+      // Edges: a->c, b->d, c->e (c & e share ticker1; d uses ticker2)
       const edges = [mkEdge('a', 'c'), mkEdge('b', 'd'), mkEdge('c', 'e')];
 
       const hierarchy = (
@@ -240,13 +240,11 @@ describe('LSP Graph Extractor Unit Tests', () => {
       );
       expect(worker, 'Worker base container exists').toBeTruthy();
 
-      // It should have at least two Tick<Worker> children (one for {c,e}, one for {d})
-      const tickChildren = (worker as HierarchyContainer).children.filter(
-        (c: HierarchyContainer) => c.name === 'Tick<Worker>'
-      );
+      // It should have at least two tick variable containers at depth 1 (ticker1 and ticker2)
+      const tickChildren = (worker as HierarchyContainer).children;
       expect(tickChildren.length).toBeGreaterThanOrEqual(2);
 
-      // Check assignments: a,b assigned to Worker; c,d assigned to different Tick<Worker>; e under Tick<Tick<Worker>> child
+      // Check assignments: a,b assigned to Worker; c,d assigned to different tick containers; e should be deeper
       const assign = hierarchy.nodeAssignments.location;
       const workerId = worker!.id;
       expect(assign['a']).toBe(workerId);
@@ -259,15 +257,13 @@ describe('LSP Graph Extractor Unit Tests', () => {
       const tickIdD = assign['d'];
       expect(tickIdC).toBeTruthy();
       expect(tickIdD).toBeTruthy();
-      // They must not be the same container (disconnected components)
+      // They should be in different containers (different tick variables)
       expect(tickIdC).not.toBe(tickIdD);
-      expect(tickContainersById[tickIdC].name).toBe('Tick<Worker>');
-      expect(tickContainersById[tickIdD].name).toBe('Tick<Worker>');
 
-      // e should be deeper: assigned to a Tick<Tick<Worker>> under the Tick<Worker> that contains c
+      // e should be deeper: assigned to a nested container with the same tick variable name as c
       const eContainerId = assign['e'];
       expect(eContainerId).toBeTruthy();
-      // Walk to find container by id and check its name
+      // Walk to find container by id and check its name matches the tick variable
       const findById = (root: HierarchyContainer, id: string): HierarchyContainer | null => {
         const stack: HierarchyContainer[] = [root];
         while (stack.length) {
@@ -278,7 +274,8 @@ describe('LSP Graph Extractor Unit Tests', () => {
         return null;
       };
       const eContainer = findById(worker as HierarchyContainer, eContainerId);
-      expect(eContainer?.name).toBe('Tick<Tick<Worker>>');
+      // Container should be named after the tick variable (ticker1), not the generic Tick<Tick<Worker>>
+      expect(eContainer?.name).toBe('ticker1');
     });
 
     it('Code: creates file→fn→var, prefixes fn, collapses single child chains', () => {

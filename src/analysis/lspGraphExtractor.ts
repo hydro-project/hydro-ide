@@ -30,6 +30,7 @@ export interface Node {
     locationId: number | null;
     locationType: string | null;
     locationKind?: string; // Original location kind (e.g., "Process<Leader>")
+    tickVariable?: string; // Tick variable name for temporal operators (e.g., "ticker")
     backtrace: [];
     treeSitterPosition?: {
       line: number;
@@ -577,6 +578,13 @@ export class LSPGraphExtractor {
       const contextEnd = Math.min(lineText.length, op.column + op.name.length + 10);
       const fullLabel = lineText.substring(contextStart, contextEnd).trim();
 
+      // Scope tick variable by enclosing function to prevent collisions across scopes
+      let scopedTickVariable: string | undefined = undefined;
+      if (op.tickVariable) {
+        const fnName = this.treeSitterParser.findEnclosingFunctionName(document, op.line) || '(top-level)';
+        scopedTickVariable = `${fnName}::${op.tickVariable}`;
+      }
+
       const node: Node = {
         id: nodeId,
         nodeType,
@@ -587,6 +595,7 @@ export class LSPGraphExtractor {
           locationId: null, // Will be enhanced by LSP if available
           locationType: null,
           locationKind: undefined,
+          tickVariable: scopedTickVariable, // Track scoped tick variable for temporal operators
           backtrace: [],
           // Store tree-sitter position for LSP enhancement
           treeSitterPosition: {
@@ -1988,32 +1997,6 @@ export class LSPGraphExtractor {
       nodesByBase.get(base)!.push(n);
     }
 
-    // Helper to compute connected components for a filtered set of node IDs
-    const computeComponents = (allowed: Set<string>): string[][] => {
-      const visited = new Set<string>();
-      const comps: string[][] = [];
-      for (const id of allowed) {
-        if (visited.has(id)) continue;
-        const comp: string[] = [];
-        const q: string[] = [id];
-        visited.add(id);
-        while (q.length) {
-          const cur = q.pop()!;
-          comp.push(cur);
-          const neigh = adjacency.get(cur);
-          if (!neigh) continue;
-          for (const nb of neigh) {
-            if (!visited.has(nb) && allowed.has(nb)) {
-              visited.add(nb);
-              q.push(nb);
-            }
-          }
-        }
-        comps.push(comp);
-      }
-      return comps;
-    };
-
     // Build base location roots
     const rootsByLabel = new Map<string, HierarchyContainer>();
     const children: HierarchyContainer[] = [];
@@ -2036,27 +2019,35 @@ export class LSPGraphExtractor {
       // Mapping node -> container at previous level (for parenting)
       const parentAtLevel = new Map<number, Map<string, string>>();
 
-      // Level 1..maxDepth: split by connected components of nodes with depth >= level
+      // Level 1..maxDepth: split by tick variable (not connected components!)
+      // Nodes at the same tick level share a container if they use the same tick variable
       for (let level = 1; level <= maxDepth; level++) {
-        const allowed = new Set<string>();
+        const nodesAtLevel = new Map<string, string[]>(); // tick variable -> node IDs
+        
         for (const n of baseNodes) {
           const m = metaById.get(n.id)!;
           if (m.depth >= level) {
-            allowed.add(n.id);
+            // Group by tick variable
+            const tickVar = n.data.tickVariable || '_unknown_'; // Fallback for nodes without tick variable
+            if (!nodesAtLevel.has(tickVar)) {
+              nodesAtLevel.set(tickVar, []);
+            }
+            nodesAtLevel.get(tickVar)!.push(n.id);
           }
         }
-        if (allowed.size === 0) continue;
+        
+        if (nodesAtLevel.size === 0) continue;
 
-        const comps = computeComponents(allowed);
         const mapThisLevel = new Map<string, string>();
 
-        for (const comp of comps) {
-          // Determine parent container for this component
+        // Create a container for each tick variable group
+        for (const [tickVar, nodeIds] of nodesAtLevel.entries()) {
+          // Determine parent container for this tick group
           let parentContainer: HierarchyContainer = root;
           if (level > 1) {
             const parentMap = parentAtLevel.get(level - 1)!;
-            // Pick the first node's parent (components shouldn't cross parents)
-            for (const nid of comp) {
+            // Pick the first node's parent (tick groups shouldn't cross parents)
+            for (const nid of nodeIds) {
               const pid = parentMap.get(nid);
               if (pid) {
                 // Find the actual container reference by walking tree (small N, so simple search)
@@ -2074,16 +2065,25 @@ export class LSPGraphExtractor {
             }
           }
 
-          const name = this.buildTickLabel(base, level);
+          // Use tick variable name for container label if available
+          // Strip function scope prefix for display (e.g., "main::ticker" -> "ticker")
+          let tickLabel: string;
+          if (tickVar !== '_unknown_') {
+            const parts = tickVar.split('::');
+            tickLabel = parts.length > 1 ? parts[parts.length - 1] : tickVar;
+          } else {
+            tickLabel = this.buildTickLabel(base, level);
+          }
+          
           const cont: HierarchyContainer = {
             id: `loc_${containerIdCounter++}`,
-            name,
+            name: tickLabel,
             children: [],
           };
           parentContainer.children.push(cont);
 
-          // Record parent for nodes in this component
-          for (const nid of comp) {
+          // Record parent for nodes in this tick scope
+          for (const nid of nodeIds) {
             mapThisLevel.set(nid, cont.id);
           }
         }

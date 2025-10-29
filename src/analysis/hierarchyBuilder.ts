@@ -16,49 +16,24 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { TreeSitterRustParser } from './treeSitterParser';
+import type {
+  GraphNode,
+  GraphEdge,
+  Hierarchy as CoreHierarchy,
+  HierarchyContainer as CoreHierarchyContainer,
+} from '../core/graphTypes';
 
-/**
- * Minimal Node interface for hierarchy building
- */
-export interface Node {
-  id: string;
-  shortLabel: string;
-  data: {
-    locationKind?: string;
-    tickVariable?: string;
-    treeSitterPosition?: {
-      line: number;
-      column: number;
-    };
-  };
-}
+// Use shared graph types; only a subset of fields is required here
+// Accept any subset of GraphNode.data fields to keep tests flexible
+export type Node = Pick<GraphNode, 'id' | 'shortLabel'> & {
+  data: Partial<GraphNode['data']>;
+};
 
-/**
- * Minimal Edge interface for hierarchy building
- */
-export interface Edge {
-  id: string;
-  source: string;
-  target: string;
-}
+export type Edge = Pick<GraphEdge, 'id' | 'source' | 'target'>;
 
-/**
- * Hierarchy container structure
- */
-export interface HierarchyContainer {
-  id: string;
-  name: string;
-  children: HierarchyContainer[];
-}
+export type HierarchyContainer = CoreHierarchyContainer;
 
-/**
- * Hierarchy structure with id and name
- */
-export interface Hierarchy {
-  id: string;
-  name: string;
-  children: HierarchyContainer[];
-}
+export type Hierarchy = CoreHierarchy;
 
 /**
  * Combined hierarchy data with choices and node assignments

@@ -11,26 +11,11 @@
  */
 
 import { OperatorRegistry } from './operatorRegistry';
+import type { GraphEdge, GraphNode } from '../core/graphTypes';
 
-/**
- * Minimal Edge interface for edge analysis
- */
-export interface Edge {
-  id: string;
-  source: string;
-  target: string;
-  semanticTags: string[];
-  label?: string;
-}
-
-/**
- * Minimal Node interface for edge analysis
- * Only requires id and shortLabel (operator name)
- */
-export interface Node {
-  id: string;
-  shortLabel: string;
-}
+// Use shared graph types. This service only reads a subset of fields.
+export type Edge = GraphEdge;
+export type Node = Pick<GraphNode, 'id' | 'shortLabel'>;
 
 /**
  * EdgeAnalyzer service for analyzing and enriching graph edges

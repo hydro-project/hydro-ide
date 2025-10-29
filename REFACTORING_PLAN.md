@@ -3,6 +3,33 @@
 **Date**: October 28, 2025  
 **Goal**: Refactor the analysis module to extract utilities, reduce file sizes, and improve separation of concerns.
 
+## Status Update — October 29, 2025
+
+Phase 3 (Refactor lspGraphExtractor) is complete. The monolithic orchestrator has been slimmed down dramatically and all complex logic has been moved into focused services with tests.
+
+- lspGraphExtractor.ts: 3,263 → 1,460 lines (−1,803 lines, −55%)
+- New services extracted:
+  - GraphBuilder (512 lines, 20 tests)
+  - EdgeAnalyzer (155 lines, 10 tests)
+  - HierarchyBuilder (547 lines, 12 tests)
+  - OperatorRegistry (Phase 2)
+- Tests: 413 passing, 1 skipped
+- Build: TypeScript compile clean
+
+Major cleanup in Phase 3.5:
+
+- Removed legacy methods and helpers that were superseded by services
+  - buildOperatorChains and all cascade helpers
+  - extractSemanticTags, filterToScope
+  - parseHydroTypeParameters, extractBoundedness, extractOrdering
+- Removed large commented-out blocks and unused imports
+- Result: lspGraphExtractor.ts now focuses on pure orchestration and JSON assembly
+
+Next up:
+
+1) Phase 4 (optional): Evaluate/finish functionFinder and decide on scopeAnalyzer migration path
+2) Phase 5: Final validation, docs polish, and service boundary documentation
+
 ## Current State
 
 ### File Sizes (Before Refactoring)

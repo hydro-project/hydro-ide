@@ -14,6 +14,7 @@ import * as path from 'path';
 import { TreeSitterRustParser, OperatorNode as TreeSitterOperatorNode } from './treeSitterParser';
 import { GraphBuilder } from './graphBuilder';
 import { OperatorRegistry } from './operatorRegistry';
+import { EdgeAnalyzer } from './edgeAnalyzer';
 
 // Import LocationInfo type for internal use
 import type { LocationInfo } from './locationAnalyzer';
@@ -180,6 +181,7 @@ export class LSPGraphExtractor {
   private treeSitterParser: TreeSitterRustParser;
   private graphBuilder: GraphBuilder;
   private operatorRegistry: OperatorRegistry;
+  private edgeAnalyzer: EdgeAnalyzer;
 
   /**
    * Create a new LSP Graph Extractor
@@ -197,6 +199,8 @@ export class LSPGraphExtractor {
     // Initialize services
     this.operatorRegistry = OperatorRegistry.getInstance();
     this.graphBuilder = new GraphBuilder(this.treeSitterParser, this.operatorRegistry, outputChannel);
+    this.edgeAnalyzer = EdgeAnalyzer.getInstance();
+    this.edgeAnalyzer.setLogCallback((msg) => this.log(msg));
 
     // Initialize the locationAnalyzer module with the output channel
     locationAnalyzer.initialize(outputChannel);
@@ -646,60 +650,6 @@ export class LSPGraphExtractor {
     this.log(`Total nodes: ${nodes.length} (${nodes.length - syntheticNodeCount} from LSP, ${syntheticNodeCount} synthetic)`);
 
     return nodes;
-  }
-  */
-
-  /**
-   * Extract edges by analyzing dataflow chains
-   *
-   * Tracks method call chains to infer connections between operators.
-   * Creates Edge objects with semantic tags inferred from type information.
-   *
-   * @param document The document being analyzed
-   * @param nodes Previously extracted nodes
-   * @param locations Location information from LocationAnalyzer
-   * @returns Promise resolving to array of edges
-   */
-  // OLD METHOD - REPLACED BY HYBRID APPROACH
-  /*
-  // OLD METHOD - REPLACED BY HYBRID APPROACH  
-  // @ts-expect-error - Keeping for reference, will be removed later
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  private async _extractEdges(
-    document: vscode.TextDocument,
-    nodes: Node[],
-    locations: LocationInfo[]
-  ): Promise<Edge[]> {
-    const edges: Edge[] = [];
-    let edgeIdCounter = 0;
-
-    // Build operator chains by analyzing code structure
-    const chains = await this.buildOperatorChains(document, locations, nodes);
-    this.log(`Built ${chains.length} operator chains`);
-
-    // Create edges from operator chains
-    for (const chain of chains) {
-      for (let i = 0; i < chain.operators.length - 1; i++) {
-        const source = chain.operators[i];
-        const target = chain.operators[i + 1];
-
-        // Extract semantic tags from return type
-        const semanticTags = this.extractSemanticTags(
-          source.returnType,
-          source.locationInfo,
-          target.locationInfo
-        );
-
-        edges.push({
-          id: `e${edgeIdCounter++}`,
-          source: source.nodeId,
-          target: target.nodeId,
-          semanticTags,
-        });
-      }
-    }
-
-    return edges;
   }
   */
 
@@ -2163,66 +2113,8 @@ export class LSPGraphExtractor {
    * @param hierarchyData Hierarchy structure with node assignments
    * @returns Complete Hydroscope JSON object
    */
-  private analyzeNetworkEdges(edges: Edge[], nodes: Node[]): Edge[] {
-    // Create a map for quick node lookup
-    const nodeMap = new Map<string, Node>();
-    for (const node of nodes) {
-      nodeMap.set(node.id, node);
-    }
-
-    let networkEdgeCount = 0;
-
-    const analyzedEdges = edges.map((edge) => {
-      const sourceNode = nodeMap.get(edge.source);
-      const targetNode = nodeMap.get(edge.target);
-
-      if (!sourceNode || !targetNode) {
-        return edge; // Skip if nodes not found
-      }
-
-      const sourceIsNetwork = this.operatorRegistry.isNetworkingOperator(sourceNode.shortLabel);
-      const targetIsNetwork = this.operatorRegistry.isNetworkingOperator(targetNode.shortLabel);
-
-      if (sourceIsNetwork || targetIsNetwork) {
-        // This is a network edge
-        networkEdgeCount++;
-        const networkTags = ['network'];
-
-        if (sourceIsNetwork && targetIsNetwork) {
-          // Both sides are network operators (rare case)
-          networkTags.push('network-to-network');
-          this.log(
-            `Network edge: ${sourceNode.shortLabel} -> ${targetNode.shortLabel} (both network ops)`
-          );
-        } else if (sourceIsNetwork) {
-          // Source is network operator (sender side)
-          networkTags.push('network-source', 'remote-sender');
-          this.log(
-            `Network edge: ${sourceNode.shortLabel} -> ${targetNode.shortLabel} (network source)`
-          );
-        } else {
-          // Target is network operator (receiver side)
-          networkTags.push('network-target', 'remote-receiver');
-          this.log(
-            `Network edge: ${sourceNode.shortLabel} -> ${targetNode.shortLabel} (network target)`
-          );
-        }
-
-        return {
-          ...edge,
-          semanticTags: [...edge.semanticTags, ...networkTags],
-        };
-      }
-
-      return edge; // Not a network edge
-    });
-
-    this.log(`Analyzed ${edges.length} edges, found ${networkEdgeCount} network edges`);
-    return analyzedEdges;
-  }
-
   /**
-   * Analyze and mark network edges, then assemble final Hydroscope JSON object
+   * Assemble final Hydroscope JSON object
    *
    * A network edge is one where either the source or target node is a networking operator.
    * We mark the networking operator side as the "remote" side for visualization purposes.
@@ -2250,8 +2142,8 @@ export class LSPGraphExtractor {
       edges = [];
     }
 
-    // Analyze and mark network edges
-    const analyzedEdges = this.analyzeNetworkEdges(edges, nodes);
+    // Analyze and mark network edges using EdgeAnalyzer service
+    const analyzedEdges = this.edgeAnalyzer.analyzeNetworkEdges(edges, nodes);
 
     // Log assembly statistics
     this.log(`Assembling Hydroscope JSON: ${nodes.length} nodes, ${analyzedEdges.length} edges`);

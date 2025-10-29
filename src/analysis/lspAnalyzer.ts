@@ -269,10 +269,52 @@ export class LSPAnalyzer {
               this.log(`  Extracted Loc parameter from hover: "${locType}"`);
               const locKind = this.parseLocationType(locType);
               if (locKind) {
-                // Update lastChainLocationKind so inheritance works
+                // Color the current operator using the extracted Loc parameter
+                const range = document.getWordRangeAtPosition(position);
+                if (range) {
+                  results.push({
+                    locationType: locType,
+                    locationKind: locKind,
+                    range,
+                    operatorName,
+                    fullReturnType: typeString,
+                  });
+                  this.log(
+                    `  ✓ Found location type '${locKind}' for '${operatorName}' via Loc parameter`
+                  );
+                }
+
+                // Update chain tracking so inheritance works for subsequent chained calls
                 lastChainLocationKind = locKind;
-                inDotChain = true;
-                this.log(`  Set chain location from Loc parameter: "${locKind}"`);
+                inDotChain = isDotChainLine;
+              }
+            }
+          }
+
+          // Fallback: If still no concrete location for Self, try deriving it from the receiver
+          // Example: ops.filter(...) → hover the receiver identifier 'ops' to get Stream<_, L, _>
+          // and parse L as the location kind. This helps when filter/map return Self at chain start.
+          const rangeAtOp = document.getWordRangeAtPosition(position);
+          if (rangeAtOp) {
+            const receiverPos = this.getReceiverHoverPosition(document, position);
+            if (receiverPos) {
+              const recvType = await this.getTypeFromHover(document, receiverPos, false, timeout);
+              if (recvType) {
+                const recvLoc = this.parseLocationType(recvType);
+                if (recvLoc && this.isValidHydroOperator(operatorName)) {
+                  results.push({
+                    locationType: recvType,
+                    locationKind: recvLoc,
+                    range: rangeAtOp,
+                    operatorName,
+                    fullReturnType: typeString,
+                  });
+                  this.log(
+                    `  ✓ Derived location type '${recvLoc}' for '${operatorName}' from receiver hover`
+                  );
+                  // Do not set chain propagation here; this is typically a chain start
+                  // Subsequent chained calls will be handled naturally when they expose concrete types
+                }
               }
             }
           }
@@ -331,6 +373,49 @@ export class LSPAnalyzer {
 
     this.log(`Hover analysis found ${results.length} location types`);
     return results;
+  }
+
+  /**
+   * Heuristic: For a method call at operatorPosition (e.g., `ops.filter`),
+   * find the receiver identifier position (e.g., the 'ops' token) on the same line
+   * so we can hover it and derive the location when the method returns `Self`.
+   *
+   * This is a best-effort approach that handles simple receivers like identifiers.
+   */
+  private getReceiverHoverPosition(
+    document: vscode.TextDocument,
+    operatorPosition: vscode.Position
+  ): vscode.Position | null {
+    try {
+      const line = document.lineAt(operatorPosition.line).text;
+      const opCol = operatorPosition.character;
+      if (opCol <= 0) return null;
+
+      // Look for the dot immediately preceding the operator name
+      const dotIdx = line.lastIndexOf('.', opCol - 1);
+      if (dotIdx <= 0) return null;
+
+      // Scan left to find the start of the receiver identifier
+      let i = dotIdx - 1;
+      // Skip whitespace
+      while (i >= 0 && /\s/.test(line[i])) i--;
+
+      // Simple identifier chars (Rust identifiers and digits/underscore)
+      const isIdentChar = (ch: string) => /[A-Za-z0-9_]/.test(ch);
+
+      const end = i;
+      while (i >= 0 && isIdentChar(line[i])) i--;
+      const start = i + 1;
+
+      // Ensure we captured at least one character and it's not immediately before the dot
+      if (start > end || end < 0) return null;
+
+      // Position somewhere inside the identifier to ensure hover resolves
+      const hoverCol = start + Math.floor((end - start + 1) / 2);
+      return new vscode.Position(operatorPosition.line, hoverCol);
+    } catch {
+      return null;
+    }
   }
 
   /**

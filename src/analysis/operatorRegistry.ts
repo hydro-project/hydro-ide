@@ -145,6 +145,8 @@ export class OperatorRegistry {
         'flat_map',
         'filter',
         'filter_map',
+        // Ordering/location wrappers
+        'assume_ordering',
         'scan',
         'enumerate',
         'inspect',
@@ -164,6 +166,7 @@ export class OperatorRegistry {
         'keys',
         'values',
         'entries',
+        'get_many_if_present',
         'collect_vec',
         'collect_ready',
         'all_ticks',
@@ -187,6 +190,8 @@ export class OperatorRegistry {
         'timeout',
         'batch',
         'yield_concat',
+        // Sources
+        'source_external_bincode',
         'source_iter',
         'source_stream',
         'source_stdin',
@@ -354,11 +359,7 @@ export class OperatorRegistry {
    */
   public inferNodeType(operatorName: string): NodeType {
     // Source operators: produce data
-    if (
-      /^(source_iter|source_stream|source_stdin|recv_stream|recv_bincode|recv_bytes)$/.test(
-        operatorName
-      )
-    ) {
+    if (/^(source_|recv_)/.test(operatorName)) {
       return 'Source';
     }
 

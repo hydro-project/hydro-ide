@@ -141,11 +141,7 @@ describe('Type Parser Utilities', () => {
 
     it('should handle complex associated type patterns', () => {
       expect(
-        extractOrdering([
-          'T',
-          'L',
-          '<KeyedStream<K, V, L, B> as Trait<TotalOrder>>::OrderType',
-        ])
+        extractOrdering(['T', 'L', '<KeyedStream<K, V, L, B> as Trait<TotalOrder>>::OrderType'])
       ).toBe('TotalOrder');
     });
   });
@@ -154,7 +150,7 @@ describe('Type Parser Utilities', () => {
     it('should parse Stream type and extract boundedness and ordering', () => {
       const typeString = "Stream<i32, Process<'a>, Unbounded, TotalOrder, ExactlyOnce>";
       const params = parseHydroTypeParameters(typeString);
-      
+
       expect(params).toHaveLength(5);
       expect(extractBoundedness(params)).toBe('Unbounded');
       expect(extractOrdering(params)).toBe('TotalOrder');
@@ -163,7 +159,7 @@ describe('Type Parser Utilities', () => {
     it('should parse KeyedStream with generic parameters', () => {
       const typeString = 'KeyedStream<K, V, L, B, O, R>';
       const params = parseHydroTypeParameters(typeString);
-      
+
       expect(params).toEqual(['K', 'V', 'L', 'B', 'O', 'R']);
       expect(extractBoundedness(params)).toBe('Unbounded'); // B defaults to Unbounded
       expect(extractOrdering(params)).toBe('NoOrder'); // O defaults to NoOrder
@@ -172,7 +168,7 @@ describe('Type Parser Utilities', () => {
     it('should handle Singleton types', () => {
       const typeString = "Singleton<String, Process<'a>, Bounded>";
       const params = parseHydroTypeParameters(typeString);
-      
+
       expect(params).toEqual(['String', "Process<'a>", 'Bounded']);
       expect(extractBoundedness(params)).toBe('Bounded');
       expect(extractOrdering(params)).toBeNull(); // No ordering specified
@@ -181,7 +177,7 @@ describe('Type Parser Utilities', () => {
     it('should handle complex nested types', () => {
       const typeString = "Stream<(K, V), Tick<Process<'a>>, Bounded, TotalOrder>";
       const params = parseHydroTypeParameters(typeString);
-      
+
       expect(params).toHaveLength(4);
       expect(params[0]).toBe('(K, V)');
       expect(params[1]).toBe("Tick<Process<'a>>");

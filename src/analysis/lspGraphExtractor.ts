@@ -11,7 +11,7 @@ import * as locationAnalyzer from './locationAnalyzer';
 import { ScopeTarget } from '../core/types';
 import { promises as fs } from 'fs';
 import * as path from 'path';
-import { TreeSitterRustParser, OperatorNode as TreeSitterOperatorNode } from './treeSitterParser';
+import { TreeSitterRustParser } from './treeSitterParser';
 import { GraphBuilder } from './graphBuilder';
 import { OperatorRegistry } from './operatorRegistry';
 import { EdgeAnalyzer } from './edgeAnalyzer';
@@ -101,61 +101,6 @@ interface CachedGraph {
 }
 
 /**
- * Internal tracking structure for operator information
- */
-interface OperatorInfo {
-  /** Operator name (e.g., "map", "filter") */
-  name: string;
-  /** Source code range */
-  range: vscode.Range;
-  /** Return type from rust-analyzer (if available) */
-  returnType: string | null;
-  /** Location type information */
-  locationInfo: LocationInfo;
-  /** Assigned node ID */
-  nodeId: string;
-}
-
-/**
- * Internal tracking structure for operator chains
- */
-interface OperatorChain {
-  /** Sequence of operators in chain */
-  operators: OperatorInfo[];
-}
-
-/**
- * Variable binding tracking structure
- *
- * Tracks which operators produce which variables through let bindings.
- * For example: `let words = source.map()` creates a binding from "words"
- * to the last operator in the chain (map).
- */
-interface VariableBinding {
-  /** Variable name (e.g., "words", "partitioned_words") */
-  varName: string;
-  /** The last operator in the chain that produces this variable */
-  producingOperator: OperatorInfo;
-  /** Line number where the binding occurs */
-  line: number;
-}
-
-/**
- * Operator usage tracking structure
- *
- * Tracks which variable an operator is called on.
- * For example: `words.map()` creates a usage where map consumes "words".
- */
-interface OperatorUsage {
-  /** The operator being called */
-  operator: OperatorInfo;
-  /** The variable it's called on (if any) */
-  consumedVariable: string | null;
-  /** Line number where the usage occurs */
-  line: number;
-}
-
-/**
  * Hierarchy data structure combining hierarchy choices and node assignments
  */
 interface HierarchyData {
@@ -197,10 +142,14 @@ export class LSPGraphExtractor {
     this.cacheHits = 0;
     this.cacheMisses = 0;
     this.treeSitterParser = new TreeSitterRustParser(outputChannel);
-    
+
     // Initialize services
     this.operatorRegistry = OperatorRegistry.getInstance();
-    this.graphBuilder = new GraphBuilder(this.treeSitterParser, this.operatorRegistry, outputChannel);
+    this.graphBuilder = new GraphBuilder(
+      this.treeSitterParser,
+      this.operatorRegistry,
+      outputChannel
+    );
     this.edgeAnalyzer = EdgeAnalyzer.getInstance();
     this.edgeAnalyzer.setLogCallback((msg) => this.log(msg));
     this.hierarchyBuilder = new HierarchyBuilder(this.treeSitterParser);
@@ -459,7 +408,11 @@ export class LSPGraphExtractor {
       this.graphBuilder.enhanceWithLSP(nodes, locations, document);
 
       // Step 4: Build hierarchies (Location + Code) using HierarchyBuilder service
-      const hierarchyData = this.hierarchyBuilder.buildLocationAndCodeHierarchies(document, nodes, edges);
+      const hierarchyData = this.hierarchyBuilder.buildLocationAndCodeHierarchies(
+        document,
+        nodes,
+        edges
+      );
 
       // Step 5: Assemble final JSON
       const json = this.assembleHydroscopeJson(nodes, edges, hierarchyData);
@@ -481,91 +434,6 @@ export class LSPGraphExtractor {
   }
 
   /**
-   * Check if a line starts with a variable reference
-   *
-   * Detects patterns like:
-   * - `varname.operator(...)`
-   * - `varname .operator(...)` (with whitespace)
-   *
-   * Also handles multi-line chains where the variable is on the previous line:
-   * ```
-   * let x = varname
-   *     .operator()
-   * ```
-   *
-   * @param document The document being analyzed
-   * @param line The line number to check
-   * @param variableNames Array of variable names to check for
-   * @returns The variable name if found, null otherwise
-   */
-  private detectVariableReference(
-    document: vscode.TextDocument,
-    line: number,
-    variableNames: string[]
-  ): string | null {
-    if (line < 0 || line >= document.lineCount) {
-      return null;
-    }
-
-    const lineText = document.lineAt(line).text.trim();
-
-    // Check each known variable to see if this line starts with it
-    for (const varName of variableNames) {
-      // Pattern: varname.operator(...) at start of line (possibly with leading whitespace)
-      if (lineText.startsWith(varName + '.') || lineText.match(new RegExp(`^${varName}\\s*\\.`))) {
-        return varName;
-      }
-    }
-
-    // If not found on current line and this looks like a dot-chain continuation,
-    // check if previous line ends with a variable name
-    if (lineText.startsWith('.') && line > 0) {
-      const prevLineText = document.lineAt(line - 1).text.trim();
-
-      for (const varName of variableNames) {
-        // Check if previous line is just the variable name or ends with variable name
-        if (
-          prevLineText === varName ||
-          prevLineText.endsWith(` ${varName}`) ||
-          prevLineText.endsWith(`=${varName}`)
-        ) {
-          return varName;
-        }
-      }
-    }
-
-    return null;
-  }
-
-  /**
-   * Build operator chains from tree-sitter analysis
-   *
-   * Creates edges between operators based on variable bindings and method chains.
-   * Uses tree-sitter as the primary source for reliable dataflow structure.
-   *
-   * @param document The document being analyzed
-   * @param scopeTarget The scope target for filtering
-   * @returns Object containing both nodes and edges from tree-sitter analysis
-   */
-
-
-
-
-  /**
-   * Extract nodes from Hydro operators using hybrid LSP + tree-sitter approach
-   *
-   * Creates nodes from both LSP location information (when available) and
-   * tree-sitter operator calls (when LSP info is missing). This ensures we
-   * capture all operators in the dataflow graph.
-   *
-   * @param document The document being analyzed
-   * @param locations Location information from LocationAnalyzer
-   * @param scopeTarget The scope target for filtering
-   * @returns Promise resolving to array of nodes
-   */
-
-  /*
-  // REMAINING OLD METHOD CODE - COMMENTED OUT
     // Create nodes from LSP locations first (these have rich type information)
     const lspNodeIds = new Set<string>();
     
@@ -658,436 +526,10 @@ export class LSPGraphExtractor {
   */
 
   /**
-   * Track operator usages to identify which variables they consume
-   *
-   * Scans for patterns like `varname.operator()` to detect variable consumption.
-   * Tracks both direct variable usage and chained usage.
-   *
-   * @param document The document being analyzed
-   * @param locations Location information from LocationAnalyzer
-   * @param locationToNode Map from location key to node
-   * @param variableBindings Map of known variable bindings
-   * @returns Array of operator usages
+   * NOTE: buildOperatorChains method has been removed - edge creation is now handled by GraphBuilder service
    */
-  private trackOperatorUsages(
-    document: vscode.TextDocument,
-    locations: LocationInfo[],
-    locationToNode: Map<string, Node>,
-    variableBindings: Map<string, VariableBinding>
-  ): OperatorUsage[] {
-    const usages: OperatorUsage[] = [];
-    const varNames = Array.from(variableBindings.keys());
-
-    // Get all operators that are part of main chains (not arguments) using tree-sitter
-    const allVariableChains = this.treeSitterParser.parseVariableBindings(document);
-    const allStandaloneChains = this.treeSitterParser.parseStandaloneChains(document);
-
-    // Create a set of main chain operators (line:column -> operator name)
-    const mainChainOperators = new Set<string>();
-
-    // Add operators from variable assignments
-    for (const binding of allVariableChains) {
-      for (const op of binding.operators) {
-        mainChainOperators.add(`${op.line}:${op.column}:${op.name}`);
-      }
-    }
-
-    // Add operators from standalone chains
-    for (const chain of allStandaloneChains) {
-      for (const op of chain) {
-        mainChainOperators.add(`${op.line}:${op.column}:${op.name}`);
-      }
-    }
-
-    for (const loc of locations) {
-      const key = `${loc.range.start.line}:${loc.range.start.character}`;
-      const node = locationToNode.get(key);
-
-      if (!node) {
-        continue;
-      }
-
-      const returnType = loc.fullReturnType || null;
-
-      const operatorInfo: OperatorInfo = {
-        name: loc.operatorName,
-        range: loc.range,
-        returnType,
-        locationInfo: loc,
-        nodeId: node.id,
-      };
-
-      // Check if this operator is part of a main chain (not an argument)
-      const operatorKey = `${loc.range.start.line}:${loc.range.start.character}:${loc.operatorName}`;
-      const isMainChainOperator = mainChainOperators.has(operatorKey);
-
-      // Only track variable consumption for main chain operators
-      let consumedVariable: string | null = null;
-
-      if (isMainChainOperator) {
-        // Use the shared helper to detect variable references
-        consumedVariable = this.detectVariableReference(document, loc.range.start.line, varNames);
-      }
-
-      usages.push({
-        operator: operatorInfo,
-        consumedVariable,
-        line: loc.range.start.line,
-      });
-
-      if (consumedVariable) {
-        this.log(
-          `Operator '${loc.operatorName}' consumes variable '${consumedVariable}' (line ${loc.range.start.line})`
-        );
-      }
-    }
-
-    this.log(
-      `Tracked ${usages.length} operator usages (${usages.filter((u) => u.consumedVariable).length} with variable consumption)`
-    );
-    return usages;
-  }
 
   /**
-   * Find all operators in a multi-line chain starting from a given line using tree-sitter
-   *
-   * Uses tree-sitter AST parsing to accurately identify operator chains,
-   * replacing the regex-based approach.
-   *
-   * @param document The document being analyzed
-   * @param startLine The line to start searching from
-   * @param locationsByLine Map of line numbers to locations on that line
-   * @param locationToNode Map from location key to node
-   * @returns Array of operators in the chain
-   */
-  private findOperatorsInChain(
-    document: vscode.TextDocument,
-    startLine: number,
-    locationsByLine: Map<number, LocationInfo[]>,
-    locationToNode: Map<string, Node>
-  ): OperatorInfo[] {
-    this.log(`[findOperatorsInChain] Starting at line ${startLine} (tree-sitter)`);
-
-    // Use tree-sitter to extract the chain
-    const tsOperators = this.treeSitterParser.extractChainFromLine(document, startLine);
-
-    this.log(`[findOperatorsInChain] Tree-sitter found ${tsOperators.length} operators`);
-
-    // Convert tree-sitter operators to our internal OperatorInfo format
-    const chainOperators: OperatorInfo[] = [];
-
-    for (const tsOp of tsOperators) {
-      const operatorInfo = this.findOperatorInfo(
-        tsOp,
-        Array.from(locationsByLine.values()).flat(),
-        locationToNode
-      );
-
-      if (operatorInfo) {
-        chainOperators.push(operatorInfo);
-        this.log(`[findOperatorsInChain]   Included: ${operatorInfo.name}`);
-      } else {
-        this.log(
-          `[findOperatorsInChain]   WARNING: Could not find operator info for ${tsOp.name} at line ${tsOp.line}`
-        );
-      }
-    }
-
-    this.log(
-      `[findOperatorsInChain] Found ${chainOperators.length} operators: ${chainOperators.map((o) => o.name).join(' -> ')}`
-    );
-    return chainOperators;
-  }
-
-  /**
-   * Find OperatorInfo for a tree-sitter operator node
-   *
-   * Matches tree-sitter operator positions with LocationInfo from LSP
-   *
-   * @param tsOp Tree-sitter operator node
-   * @param locations All location information
-   * @param locationToNode Map from location key to node
-   * @returns OperatorInfo if found, null otherwise
-   */
-  private findOperatorInfo(
-    tsOp: TreeSitterOperatorNode,
-    locations: LocationInfo[],
-    locationToNode: Map<string, Node>
-  ): OperatorInfo | null {
-    // Find the LocationInfo that matches this tree-sitter operator
-    // Use flexible matching: same line and operator name, with coordinate tolerance
-    const candidates = locations.filter(
-      (loc) => loc.range.start.line === tsOp.line && loc.operatorName === tsOp.name
-    );
-
-    // If we have multiple candidates on the same line, pick the closest one by column
-    let bestMatch: LocationInfo | null = null;
-    let bestDistance = Infinity;
-
-    for (const loc of candidates) {
-      const distance = Math.abs(loc.range.start.character - tsOp.column);
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        bestMatch = loc;
-      }
-    }
-
-    if (!bestMatch) {
-      // Fallback 1: try to find any operator with the same name on nearby lines (±3 lines)
-      for (let lineOffset = -3; lineOffset <= 3; lineOffset++) {
-        const targetLine = tsOp.line + lineOffset;
-        const nearbyCandidate = locations.find(
-          (loc) => loc.range.start.line === targetLine && loc.operatorName === tsOp.name
-        );
-        if (nearbyCandidate) {
-          bestMatch = nearbyCandidate;
-          this.log(
-            `[findOperatorInfo] Using nearby match for ${tsOp.name}: line ${targetLine} (offset ${lineOffset})`
-          );
-          break;
-        }
-      }
-    }
-
-    if (!bestMatch) {
-      // Fallback 2: try to find any operator with the same name anywhere (relaxed matching)
-      const anyMatch = locations.find((loc) => loc.operatorName === tsOp.name);
-      if (anyMatch) {
-        bestMatch = anyMatch;
-        this.log(
-          `[findOperatorInfo] Using relaxed match for ${tsOp.name}: found at line ${anyMatch.range.start.line} (tree-sitter expected line ${tsOp.line})`
-        );
-      }
-    }
-
-    if (!bestMatch) {
-      // Fallback 3: Create synthetic location info for known operators without LSP data
-      if (this.operatorRegistry.isKnownDataflowOperator(tsOp.name)) {
-        this.log(
-          `[findOperatorInfo] Creating synthetic location for known operator ${tsOp.name} at line ${tsOp.line}`
-        );
-
-        // Create a synthetic LocationInfo for this operator
-        const syntheticLocation: LocationInfo = {
-          operatorName: tsOp.name,
-          range: new vscode.Range(
-            new vscode.Position(tsOp.line, tsOp.column),
-            new vscode.Position(tsOp.line, tsOp.column + tsOp.name.length)
-          ),
-          locationType: 'Unknown',
-          locationKind: 'Process<Leader>',
-          fullReturnType: undefined,
-        };
-
-        bestMatch = syntheticLocation;
-      }
-    }
-
-    if (!bestMatch) {
-      this.log(
-        `[findOperatorInfo] No matching location found for ${tsOp.name} at line ${tsOp.line}`
-      );
-      return null;
-    }
-
-    const key = `${bestMatch.range.start.line}:${bestMatch.range.start.character}`;
-    const node = locationToNode.get(key);
-
-    if (!node) {
-      // For synthetic locations, we need to create a synthetic node
-      if (bestMatch && !bestMatch.locationKind && this.operatorRegistry.isKnownDataflowOperator(tsOp.name)) {
-        this.log(
-          `[findOperatorInfo] Creating synthetic node for ${tsOp.name} at line ${tsOp.line}`
-        );
-
-        // Create a synthetic node ID
-        const syntheticNodeId = `synthetic_${tsOp.name}_${tsOp.line}_${tsOp.column}`;
-
-        // We'll need to add this to the locationToNode map, but for now return the info
-        // The caller will need to handle synthetic nodes appropriately
-        return {
-          name: tsOp.name,
-          range: bestMatch.range,
-          returnType: null,
-          locationInfo: bestMatch,
-          nodeId: syntheticNodeId,
-        };
-      }
-
-      this.log(
-        `[findOperatorInfo] No node found for key ${key} (${tsOp.name} at line ${tsOp.line})`
-      );
-      return null;
-    }
-
-    const returnType = bestMatch.fullReturnType || null;
-
-    // Skip location constructors (they don't produce dataflow)
-    // Only include Hydro dataflow operators
-    if (returnType && !this.operatorRegistry.isValidDataflowOperator(tsOp.name, returnType)) {
-      this.log(
-        `[findOperatorInfo] Filtered out ${tsOp.name} at line ${tsOp.line} - non-dataflow type: ${returnType}`
-      );
-      return null;
-    }
-
-    // If no return type is available, check if it's a known dataflow operator
-    if (!returnType) {
-      if (this.operatorRegistry.isKnownDataflowOperator(tsOp.name)) {
-        this.log(
-          `[findOperatorInfo] No return type for ${tsOp.name} at line ${tsOp.line}, but it's a known dataflow operator - including`
-        );
-      } else {
-        this.log(
-          `[findOperatorInfo] WARNING: ${tsOp.name} at line ${tsOp.line} has no return type and is not a known dataflow operator - including anyway`
-        );
-      }
-    }
-
-    return {
-      name: bestMatch.operatorName,
-      range: bestMatch.range,
-      returnType,
-      locationInfo: bestMatch,
-      nodeId: node.id,
-    };
-    return null;
-  }
-
-  /**
-   * Scan document for variable bindings using tree-sitter
-   *
-   * Identifies let bindings that assign operator chains to variables.
-   * For example: `let words = source.map()` creates a binding from "words"
-   * to the map operator.
-   *
-   * This now captures the LAST operator in the chain (what the variable represents).
-   *
-   * @param document The document being analyzed
-   * @param locations Location information from LocationAnalyzer
-   * @param locationToNode Map from location key to node
-   * @returns Map from variable name to variable binding info
-   */
-  private async scanVariableBindings(
-    document: vscode.TextDocument,
-    locations: LocationInfo[],
-    locationToNode: Map<string, Node>
-  ): Promise<Map<string, VariableBinding>> {
-    const bindings = new Map<string, VariableBinding>();
-
-    // Use tree-sitter to parse variable bindings
-    const treeSitterBindings = this.treeSitterParser.parseVariableBindings(document);
-
-    this.log(`Tree-sitter found ${treeSitterBindings.length} variable bindings`);
-
-    // Convert tree-sitter bindings to our internal format
-    for (const tsBinding of treeSitterBindings) {
-      // Find the last operator in the chain (what the variable represents)
-      if (tsBinding.operators.length === 0) {
-        continue;
-      }
-
-      const lastTsOp = tsBinding.operators[tsBinding.operators.length - 1];
-
-      // Find the corresponding OperatorInfo from our locations
-      const operatorInfo = this.findOperatorInfo(lastTsOp, locations, locationToNode);
-
-      if (!operatorInfo) {
-        this.log(
-          `WARNING: Could not find operator info for ${lastTsOp.name} at line ${lastTsOp.line}`
-        );
-        continue;
-      }
-
-      bindings.set(tsBinding.varName, {
-        varName: tsBinding.varName,
-        producingOperator: operatorInfo,
-        line: tsBinding.line,
-      });
-
-      this.log(
-        `Found variable binding: ${tsBinding.varName} = ${operatorInfo.name} (line ${tsBinding.line})`
-      );
-    }
-
-    this.log(`Scanned ${bindings.size} variable bindings`);
-    return bindings;
-  }
-
-  /**
-   * Build operator chains by tracking dataflow sequences
-   *
-   * Uses variable binding graph approach to identify connections between operators.
-   * This handles:
-   * - Same-line chains: a.map().filter()
-   * - Multi-line chains: a.map() \n .filter()
-   * - Variable bindings: let x = a.map(); let y = x.filter();
-   * - Location constructors in the dataflow
-   *
-   * @param document The document being analyzed
-   * @param locations Location information from LocationAnalyzer
-   * @param nodes Previously extracted nodes
-   * @returns Promise resolving to array of operator chains
-   */
-  // @ts-expect-error - Old method, will be removed
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  private async buildOperatorChains(
-    document: vscode.TextDocument,
-    locations: LocationInfo[],
-    nodes: Node[]
-  ): Promise<OperatorChain[]> {
-    const chains: OperatorChain[] = [];
-
-    // Create a map from location position key to node for quick lookup
-    // The key issue: nodes are created from a filtered subset of locations (operatorLocations)
-    // and we need to map each location back to its corresponding node.
-    //
-    // Since nodes don't store their source position, we match by:
-    // 1. Operator name (shortLabel)
-    // 2. Location kind (locationKind)
-    // 3. Order of appearance (to handle duplicates)
-
-    const locationToNode = new Map<string, Node>();
-
-    // Group nodes by their signature for matching
-    const nodesBySignature = new Map<string, Node[]>();
-    for (const node of nodes) {
-      const signature = `${node.shortLabel}@${node.data.locationKind}`;
-      if (!nodesBySignature.has(signature)) {
-        nodesBySignature.set(signature, []);
-      }
-      nodesBySignature.get(signature)!.push(node);
-    }
-
-    // Track which node index we've used for each signature
-    const usedNodeIndices = new Map<string, number>();
-
-    // Map each location to its corresponding node
-    for (const loc of locations) {
-      const key = `${loc.range.start.line}:${loc.range.start.character}`;
-      const signature = `${loc.operatorName}@${loc.locationKind}`;
-
-      const nodesWithSignature = nodesBySignature.get(signature);
-      if (nodesWithSignature && nodesWithSignature.length > 0) {
-        // Get the next unused node with this signature
-        const usedIndex = usedNodeIndices.get(signature) || 0;
-        if (usedIndex < nodesWithSignature.length) {
-          const matchingNode = nodesWithSignature[usedIndex];
-          locationToNode.set(key, matchingNode);
-          usedNodeIndices.set(signature, usedIndex + 1);
-        }
-      }
-    }
-
-    // Group locations by line to identify chains
-    const locationsByLine = new Map<number, LocationInfo[]>();
-    for (const loc of locations) {
-      const line = loc.range.start.line;
-      if (!locationsByLine.has(line)) {
-        locationsByLine.set(line, []);
-      }
-      locationsByLine.get(line)!.push(loc);
-    }
 
     // Step 1: Scan for variable bindings
     const variableBindings = await this.scanVariableBindings(document, locations, locationToNode);
@@ -1223,7 +665,10 @@ export class LSPGraphExtractor {
           const returnType = loc.fullReturnType || null;
 
           // Skip operators that are not valid dataflow operators
-          if (returnType && !this.operatorRegistry.isValidDataflowOperator(loc.operatorName, returnType)) {
+          if (
+            returnType &&
+            !this.operatorRegistry.isValidDataflowOperator(loc.operatorName, returnType)
+          ) {
             this.log(
               `[buildOperatorChains] Filtered out ${loc.operatorName} - not a dataflow operator (return type: ${returnType})`
             );
@@ -1966,7 +1411,6 @@ export class LSPGraphExtractor {
    * @returns The inferred node type
    */
 
-
   /**
    * Check if an operator is a valid dataflow operator based on its return type
    *
@@ -1979,18 +1423,12 @@ export class LSPGraphExtractor {
    * networking operators that are essential parts of Hydro dataflow pipelines.
    */
 
-
-
-
-
-
   /**
    * Extract location type from location kind string
    *
    * @param locationKind The location kind (e.g., "Process<Leader>", "Tick<Cluster<Worker>>")
    * @returns Location type string or null
    */
-
 
   /**
    * Assemble Hydroscope JSON from extracted components

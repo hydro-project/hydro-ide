@@ -22,14 +22,7 @@
  * Node type for graph visualization
  * Maps to visual appearance in Hydroscope
  */
-export type NodeType =
-  | 'Source'
-  | 'Sink'
-  | 'Transform'
-  | 'Join'
-  | 'Network'
-  | 'Aggregation'
-  | 'Tee';
+export type NodeType = 'Source' | 'Sink' | 'Transform' | 'Join' | 'Network' | 'Aggregation' | 'Tee';
 
 /**
  * Operator configuration structure
@@ -292,7 +285,11 @@ export class OperatorRegistry {
 
     // Accept operators that return live collection types (canonical Hydro collections)
     // This includes networking operators like broadcast_bincode that return Stream<T, Cluster<...>, ...>
-    if (this.config.collectionTypes.some((collectionType: string) => returnType.includes(collectionType))) {
+    if (
+      this.config.collectionTypes.some((collectionType: string) =>
+        returnType.includes(collectionType)
+      )
+    ) {
       return true;
     }
 

@@ -65,9 +65,7 @@ describe('EdgeAnalyzer', () => {
         { id: 'n2', shortLabel: 'recv_bincode' },
       ];
 
-      const edges: Edge[] = [
-        { id: 'e1', source: 'n1', target: 'n2', semanticTags: [] },
-      ];
+      const edges: Edge[] = [{ id: 'e1', source: 'n1', target: 'n2', semanticTags: [] }];
 
       const result = analyzer.analyzeNetworkEdges(edges, nodes);
 
@@ -137,9 +135,7 @@ describe('EdgeAnalyzer', () => {
 
     it('should handle empty nodes array', () => {
       const nodes: Node[] = [];
-      const edges: Edge[] = [
-        { id: 'e1', source: 'n1', target: 'n2', semanticTags: [] },
-      ];
+      const edges: Edge[] = [{ id: 'e1', source: 'n1', target: 'n2', semanticTags: [] }];
 
       const result = analyzer.analyzeNetworkEdges(edges, nodes);
 
@@ -153,9 +149,7 @@ describe('EdgeAnalyzer', () => {
         { id: 'n2', shortLabel: 'send_bincode' },
       ];
 
-      const edges: Edge[] = [
-        { id: 'e1', source: 'n1', target: 'n2', semanticTags: [] },
-      ];
+      const edges: Edge[] = [{ id: 'e1', source: 'n1', target: 'n2', semanticTags: [] }];
 
       analyzer.analyzeNetworkEdges(edges, nodes);
 

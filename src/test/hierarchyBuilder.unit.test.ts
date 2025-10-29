@@ -284,7 +284,7 @@ describe('HierarchyBuilder', () => {
 
       const locationHierarchy = result.hierarchyChoices[0];
       const leaderRoot = locationHierarchy.children[0];
-      
+
       // Should have two tick containers (one for each tick variable)
       expect(leaderRoot.children.length).toBeGreaterThanOrEqual(1);
     });
@@ -299,16 +299,16 @@ describe('HierarchyBuilder', () => {
       ];
       const edges: Edge[] = [];
 
-      mockParser.parseStandaloneChains = vi.fn().mockReturnValue([
-        [{ name: 'map', line: 10, column: 5 }],
-      ]);
+      mockParser.parseStandaloneChains = vi
+        .fn()
+        .mockReturnValue([[{ name: 'map', line: 10, column: 5 }]]);
       mockParser.findEnclosingFunctionName = vi.fn().mockReturnValue('process_data');
 
       const result = builder.buildLocationAndCodeHierarchies(mockDocument, nodes, edges);
 
       const codeHierarchy = result.hierarchyChoices[1];
       const fileContainer = codeHierarchy.children[0];
-      
+
       // Should have function container
       expect(fileContainer.children.length).toBeGreaterThan(0);
       expect(fileContainer.children.some((c) => c.name.includes('process_data'))).toBe(true);

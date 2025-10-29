@@ -59,10 +59,7 @@ describe('GraphBuilder', () => {
         {
           varName: 'result',
           line: 0,
-          operators: [
-            createOperatorNode('map', 0, 21),
-            createOperatorNode('filter', 0, 27),
-          ],
+          operators: [createOperatorNode('map', 0, 21), createOperatorNode('filter', 0, 27)],
         },
       ]);
 
@@ -80,10 +77,7 @@ describe('GraphBuilder', () => {
         {
           varName: 'result',
           line: 0,
-          operators: [
-            createOperatorNode('map', 0, 21),
-            createOperatorNode('filter', 0, 27),
-          ],
+          operators: [createOperatorNode('map', 0, 21), createOperatorNode('filter', 0, 27)],
         },
       ]);
 
@@ -101,10 +95,7 @@ describe('GraphBuilder', () => {
         {
           varName: 'result',
           line: 0,
-          operators: [
-            createOperatorNode('unknown_op', 0, 21),
-            createOperatorNode('filter', 0, 33),
-          ],
+          operators: [createOperatorNode('unknown_op', 0, 21), createOperatorNode('filter', 0, 33)],
         },
       ]);
 
@@ -120,10 +111,7 @@ describe('GraphBuilder', () => {
       const mockDocument = createMockDocument(['result.map().filter();']);
 
       vi.mocked(mockParser.parseStandaloneChains).mockReturnValue([
-        [
-          createOperatorNode('map', 0, 7),
-          createOperatorNode('filter', 0, 13),
-        ],
+        [createOperatorNode('map', 0, 7), createOperatorNode('filter', 0, 13)],
       ]);
 
       const result = graphBuilder.buildFromTreeSitter(mockDocument, {});
@@ -133,10 +121,7 @@ describe('GraphBuilder', () => {
     });
 
     it('creates inter-variable edges', () => {
-      const mockDocument = createMockDocument([
-        'let x = source.map();',
-        'let y = x.filter();',
-      ]);
+      const mockDocument = createMockDocument(['let x = source.map();', 'let y = x.filter();']);
 
       vi.mocked(mockParser.parseVariableBindings).mockReturnValue([
         {
@@ -280,9 +265,7 @@ describe('GraphBuilder', () => {
     it('enhances nodes with LSP location information', () => {
       const mockDocument = createMockDocument(['let x = source.map();']);
 
-      const nodes = [
-        createGraphNode('0', 'Transform', 'map', 0, 15),
-      ];
+      const nodes = [createGraphNode('0', 'Transform', 'map', 0, 15)];
 
       const locations = [
         {
@@ -306,9 +289,7 @@ describe('GraphBuilder', () => {
     it('does not enhance when operator names mismatch', () => {
       const mockDocument = createMockDocument(['let x = source.map();']);
 
-      const nodes = [
-        createGraphNode('0', 'Transform', 'map', 0, 15),
-      ];
+      const nodes = [createGraphNode('0', 'Transform', 'map', 0, 15)];
 
       const locations = [
         {
@@ -331,9 +312,7 @@ describe('GraphBuilder', () => {
     it('matches closest location when multiple candidates', () => {
       const mockDocument = createMockDocument(['map(); map();']);
 
-      const nodes = [
-        createGraphNode('0', 'Transform', 'map', 0, 0),
-      ];
+      const nodes = [createGraphNode('0', 'Transform', 'map', 0, 0)];
 
       const locations = [
         {
@@ -364,9 +343,7 @@ describe('GraphBuilder', () => {
     it('skips enhancement when distance too large', () => {
       const mockDocument = createMockDocument(['map();', '', '', '', '', 'map();']);
 
-      const nodes = [
-        createGraphNode('0', 'Transform', 'map', 0, 0),
-      ];
+      const nodes = [createGraphNode('0', 'Transform', 'map', 0, 0)];
 
       const locations = [
         {
@@ -391,7 +368,12 @@ describe('GraphBuilder', () => {
 /**
  * Helper to create mock OperatorNode
  */
-function createOperatorNode(name: string, line: number, column: number, tickVariable?: string): OperatorNode {
+function createOperatorNode(
+  name: string,
+  line: number,
+  column: number,
+  tickVariable?: string
+): OperatorNode {
   return {
     name,
     line,
@@ -405,7 +387,13 @@ function createOperatorNode(name: string, line: number, column: number, tickVari
 /**
  * Helper to create mock graph node
  */
-function createGraphNode(id: string, nodeType: 'Transform' | 'Source' | 'Sink', shortLabel: string, line: number, column: number) {
+function createGraphNode(
+  id: string,
+  nodeType: 'Transform' | 'Source' | 'Sink',
+  shortLabel: string,
+  line: number,
+  column: number
+) {
   return {
     id,
     nodeType,

@@ -581,7 +581,8 @@ export class LSPGraphExtractor {
       // Scope tick variable by enclosing function to prevent collisions across scopes
       let scopedTickVariable: string | undefined = undefined;
       if (op.tickVariable) {
-        const fnName = this.treeSitterParser.findEnclosingFunctionName(document, op.line) || '(top-level)';
+        const fnName =
+          this.treeSitterParser.findEnclosingFunctionName(document, op.line) || '(top-level)';
         scopedTickVariable = `${fnName}::${op.tickVariable}`;
       }
 
@@ -817,7 +818,9 @@ export class LSPGraphExtractor {
   private assignDefaultLocations(_nodes: Node[]): void {
     // No longer assign fake location names
     // Nodes without location info will be handled by hierarchy building
-    this.log(`Skipping default location assignment - nodes without locations will be grouped as "(unknown location)"`);
+    this.log(
+      `Skipping default location assignment - nodes without locations will be grouped as "(unknown location)"`
+    );
   }
 
   /**
@@ -2023,7 +2026,7 @@ export class LSPGraphExtractor {
       // Nodes at the same tick level share a container if they use the same tick variable
       for (let level = 1; level <= maxDepth; level++) {
         const nodesAtLevel = new Map<string, string[]>(); // tick variable -> node IDs
-        
+
         for (const n of baseNodes) {
           const m = metaById.get(n.id)!;
           if (m.depth >= level) {
@@ -2035,7 +2038,7 @@ export class LSPGraphExtractor {
             nodesAtLevel.get(tickVar)!.push(n.id);
           }
         }
-        
+
         if (nodesAtLevel.size === 0) continue;
 
         const mapThisLevel = new Map<string, string>();
@@ -2074,7 +2077,7 @@ export class LSPGraphExtractor {
           } else {
             tickLabel = this.buildTickLabel(base, level);
           }
-          
+
           const cont: HierarchyContainer = {
             id: `loc_${containerIdCounter++}`,
             name: tickLabel,

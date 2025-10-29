@@ -120,6 +120,9 @@ export class TreeSitterRustParser {
   /**
    * Parse document and extract standalone operator chains (not assigned to variables)
    *
+   * This uses a comprehensive approach: find ALL method chains in the AST, regardless of context,
+   * then filter out chains that are part of variable bindings (already captured by parseVariableBindings).
+   *
    * @param document The document to parse
    * @returns Array of standalone operator chains
    */
@@ -127,46 +130,86 @@ export class TreeSitterRustParser {
     const sourceCode = document.getText();
     const tree = this.parser.parse(sourceCode);
     const chains: OperatorNode[][] = [];
+    const seenChainKeys = new Set<string>();
 
     this.log(`Parsing standalone chains with tree-sitter: ${document.fileName}`);
 
-    // Walk the AST to find expression statements, return expressions, and other contexts with method chains
+    // First, identify all chains that are part of variable bindings (to avoid duplicates)
+    const variableBindingChainKeys = new Set<string>();
     this.walkTree(tree.rootNode, (node) => {
-      // Look for expression_statement nodes that contain method chains
-      if (node.type === 'expression_statement') {
-        // Check if this expression statement contains a method chain
-        const chainNode = node.children.find(
+      if (node.type === 'let_declaration') {
+        const valueNode = node.children.find(
           (child: SyntaxNode) =>
             child.type === 'call_expression' || child.type === 'field_expression'
         );
-
-        if (chainNode) {
-          const operators = this.extractOperatorChain(chainNode);
-          if (operators.length > 0) {
-            chains.push(operators);
-            this.log(
-              `Found standalone chain with ${operators.length} operators: [${operators.map((op) => op.name).join(', ')}]`
-            );
-          }
+        if (valueNode) {
+          // Mark this chain as belonging to a variable binding
+          const chainKey = this.makeChainKey(valueNode);
+          variableBindingChainKeys.add(chainKey);
         }
       }
+    });
 
-      // Also look for return expressions with method chains
-      if (node.type === 'return_expression') {
-        // The return expression should have a child that is the returned value
-        const returnValue = node.children.find(
-          (child: SyntaxNode) =>
-            child.type === 'call_expression' || child.type === 'field_expression'
-        );
+    // Now walk the entire tree and find ALL method chains
+    this.walkTree(tree.rootNode, (node) => {
+      // Look for any call_expression (start of potential chain)
+      // We only look at call_expression (not field_expression) to avoid duplicates
+      if (node.type === 'call_expression') {
+        // Check if this is the outermost call in a chain
+        // by checking if parent is a chain-related node
+        const parent = node.parent;
+        if (parent && (parent.type === 'call_expression' || parent.type === 'field_expression')) {
+          // This is part of a larger chain, skip it (we'll process the outermost call)
+          return;
+        }
 
-        if (returnValue) {
-          const operators = this.extractOperatorChain(returnValue);
-          if (operators.length > 0) {
-            chains.push(operators);
-            this.log(
-              `Found return chain with ${operators.length} operators: [${operators.map((op) => op.name).join(', ')}]`
-            );
+        // Skip if this call is inside the arguments of a METHOD call (part of parent chain)
+        // but ALLOW if it's inside arguments of a FUNCTION call (separate chain)
+        let ancestor = parent;
+        while (ancestor) {
+          if (ancestor.type === 'arguments') {
+            // Check if this arguments node belongs to a method call (field_expression)
+            // or a function call (direct call_expression with identifier)
+            const argsParent = ancestor.parent;
+            if (argsParent && argsParent.type === 'call_expression') {
+              // Check if this is a method call (has field_expression as function)
+              const functionNode = argsParent.children.find(
+                (c: SyntaxNode) => c.type === 'field_expression' || c.type === 'identifier'
+              );
+              if (functionNode && functionNode.type === 'field_expression') {
+                // This is inside arguments of a method call (part of parent chain), skip it
+                return;
+              }
+              // Otherwise it's a function call argument - allow it (separate chain)
+            }
+            break; // Found arguments node, decision made
           }
+          // Stop if we hit a statement boundary (these are safe boundaries)
+          if (
+            ancestor.type === 'expression_statement' ||
+            ancestor.type === 'let_declaration' ||
+            ancestor.type === 'return_expression'
+          ) {
+            break;
+          }
+          ancestor = ancestor.parent;
+        }
+
+        const operators = this.extractOperatorChain(node);
+        if (operators.length > 0) {
+          // Create a unique key for this chain based on its position
+          const chainKey = this.makeChainKey(node);
+
+          // Skip if this chain is part of a variable binding or already seen
+          if (variableBindingChainKeys.has(chainKey) || seenChainKeys.has(chainKey)) {
+            return;
+          }
+
+          seenChainKeys.add(chainKey);
+          chains.push(operators);
+          this.log(
+            `Found chain with ${operators.length} operators: [${operators.map((op) => op.name).join(', ')}]`
+          );
         }
       }
     });
@@ -175,6 +218,15 @@ export class TreeSitterRustParser {
     return chains;
   }
 
+  /**
+   * Create a unique key for a chain based on its position in the source
+   */
+  private makeChainKey(node: SyntaxNode): string {
+    return `${node.startPosition.row}:${node.startPosition.column}`;
+  }
+
+  /**
+   * Find the last expression in a block that would be an implicit return
   /**
    * Extract operator chain from a specific line
    *
@@ -345,19 +397,25 @@ export class TreeSitterRustParser {
         const fieldIdentifier = method.children.find(
           (child: SyntaxNode) => child.type === 'field_identifier'
         );
-        
+
         if (fieldIdentifier) {
           const operatorName = fieldIdentifier.text;
-          
+
           // Check if this is a temporal operator that takes a tick argument
-          const temporalOperators = ['batch', 'snapshot', 'snapshot_atomic', 'sample_every', 'timeout'];
+          const temporalOperators = [
+            'batch',
+            'snapshot',
+            'snapshot_atomic',
+            'sample_every',
+            'timeout',
+          ];
           let tickVariable: string | undefined;
-          
+
           if (temporalOperators.includes(operatorName)) {
             // Extract the first argument (tick variable)
             tickVariable = this.extractFirstArgument(node);
           }
-          
+
           operators.push({
             name: operatorName,
             line: fieldIdentifier.startPosition.row,
@@ -367,7 +425,7 @@ export class TreeSitterRustParser {
             tickVariable,
           });
         }
-        
+
         // Continue with the receiver chain
         const receiver = method.children.find(
           (child: SyntaxNode) => child.type !== 'field_identifier' && child.type !== '.'
@@ -416,7 +474,7 @@ export class TreeSitterRustParser {
   /**
    * Extract the first argument from a call_expression node
    * Used to get tick variable from temporal operators like batch(ticker, ...)
-   * 
+   *
    * @param callNode The call_expression node
    * @returns The tick variable name (e.g., "ticker", "t") or undefined
    */
@@ -424,19 +482,19 @@ export class TreeSitterRustParser {
     // Find the arguments node
     const argsNode = callNode.children.find((child: SyntaxNode) => child.type === 'arguments');
     if (!argsNode) return undefined;
-    
+
     // Get the first argument
     for (const child of argsNode.children) {
       // Skip punctuation like '(' and ','
       if (child.type === '(' || child.type === ')' || child.type === ',') {
         continue;
       }
-      
+
       // Handle direct identifier: batch(ticker, ...)
       if (child.type === 'identifier') {
         return child.text;
       }
-      
+
       // Handle reference: batch(&ticker, ...)
       if (child.type === 'reference_expression' || child.type === 'unary_expression') {
         const identifier = child.children.find((c: SyntaxNode) => c.type === 'identifier');
@@ -444,11 +502,11 @@ export class TreeSitterRustParser {
           return identifier.text;
         }
       }
-      
+
       // Found a non-identifier first arg, return undefined
       return undefined;
     }
-    
+
     return undefined;
   }
 

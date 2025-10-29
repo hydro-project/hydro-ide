@@ -209,10 +209,22 @@ describe('LSP Graph Extractor Unit Tests', () => {
         mkNode('a', 'map', 'Process<Worker>'),
         mkNode('b', 'filter', 'Process<Worker>'),
         // depth 1 (Tick<...>) - different tick variables
-        { ...mkNode('c', 'reduce', 'Tick<Process<Worker>>'), data: { ...mkNode('c', 'reduce', 'Tick<Process<Worker>>').data, tickVariable: 'ticker1' } },
-        { ...mkNode('d', 'fold', 'Tick<Process<Worker>>'), data: { ...mkNode('d', 'fold', 'Tick<Process<Worker>>').data, tickVariable: 'ticker2' } },
+        {
+          ...mkNode('c', 'reduce', 'Tick<Process<Worker>>'),
+          data: { ...mkNode('c', 'reduce', 'Tick<Process<Worker>>').data, tickVariable: 'ticker1' },
+        },
+        {
+          ...mkNode('d', 'fold', 'Tick<Process<Worker>>'),
+          data: { ...mkNode('d', 'fold', 'Tick<Process<Worker>>').data, tickVariable: 'ticker2' },
+        },
         // depth 2 (Tick<Tick<...>>) - uses same tick variable as c
-        { ...mkNode('e', 'inspect', 'Tick<Tick<Process<Worker>>>'), data: { ...mkNode('e', 'inspect', 'Tick<Tick<Process<Worker>>>').data, tickVariable: 'ticker1' } },
+        {
+          ...mkNode('e', 'inspect', 'Tick<Tick<Process<Worker>>>'),
+          data: {
+            ...mkNode('e', 'inspect', 'Tick<Tick<Process<Worker>>>').data,
+            tickVariable: 'ticker1',
+          },
+        },
       ];
 
       // Edges: a->c, b->d, c->e (c & e share ticker1; d uses ticker2)
@@ -285,9 +297,7 @@ describe('LSP Graph Extractor Unit Tests', () => {
 
       const parser = (extractor as unknown as { treeSitterParser: unknown })
         .treeSitterParser as unknown as {
-        parseVariableBindings: (
-          d: vscode.TextDocument
-        ) => Array<{
+        parseVariableBindings: (d: vscode.TextDocument) => Array<{
           varName: string;
           line: number;
           operators: Array<{

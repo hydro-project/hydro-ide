@@ -1,6 +1,6 @@
 /**
  * Unit tests for TreeSitterRustParser
- * 
+ *
  * These tests validate the tree-sitter parsing logic in isolation
  */
 
@@ -11,10 +11,16 @@ import { TreeSitterRustParser } from '../analysis/treeSitterParser';
 // Mock VSCode
 vi.mock('vscode', () => ({
   Range: class MockRange {
-    constructor(public start: { line: number; character: number }, public end: { line: number; character: number }) {}
+    constructor(
+      public start: { line: number; character: number },
+      public end: { line: number; character: number }
+    ) {}
   },
   Position: class MockPosition {
-    constructor(public line: number, public character: number) {}
+    constructor(
+      public line: number,
+      public character: number
+    ) {}
   },
   OutputChannel: {
     appendLine: vi.fn(),
@@ -43,9 +49,9 @@ describe('TreeSitterRustParser Unit Tests', () => {
     it('should extract simple variable assignments', () => {
       const code = 'let process = flow.process();';
       const mockDocument = createMockDocument(code);
-      
+
       const bindings = parser.parseVariableBindings(mockDocument);
-      
+
       expect(bindings).toHaveLength(1);
       expect(bindings[0].varName).toBe('process');
       expect(bindings[0].operators).toHaveLength(1);
@@ -57,13 +63,13 @@ describe('TreeSitterRustParser Unit Tests', () => {
         .source_iter(vec!["abc"])
         .map(|s| s.to_string());`;
       const mockDocument = createMockDocument(code);
-      
+
       const bindings = parser.parseVariableBindings(mockDocument);
-      
+
       expect(bindings).toHaveLength(1);
       expect(bindings[0].varName).toBe('words');
       expect(bindings[0].operators).toHaveLength(2);
-      expect(bindings[0].operators.map(op => op.name)).toEqual(['source_iter', 'map']);
+      expect(bindings[0].operators.map((op) => op.name)).toEqual(['source_iter', 'map']);
     });
 
     it('should extract complex multi-line chains', () => {
@@ -73,13 +79,18 @@ describe('TreeSitterRustParser Unit Tests', () => {
         .entries()
         .values();`;
       const mockDocument = createMockDocument(code);
-      
+
       const bindings = parser.parseVariableBindings(mockDocument);
-      
+
       expect(bindings).toHaveLength(1);
       expect(bindings[0].varName).toBe('batches');
       expect(bindings[0].operators).toHaveLength(4);
-      expect(bindings[0].operators.map(op => op.name)).toEqual(['batch', 'fold', 'entries', 'values']);
+      expect(bindings[0].operators.map((op) => op.name)).toEqual([
+        'batch',
+        'fold',
+        'entries',
+        'values',
+      ]);
     });
 
     it('should not include argument operators in main chains', () => {
@@ -87,11 +98,11 @@ describe('TreeSitterRustParser Unit Tests', () => {
         .batch(&cluster.tick())
         .fold(|| 0, |count, _| *count += 1);`;
       const mockDocument = createMockDocument(code);
-      
+
       const bindings = parser.parseVariableBindings(mockDocument);
-      
+
       expect(bindings).toHaveLength(1);
-      const operatorNames = bindings[0].operators.map(op => op.name);
+      const operatorNames = bindings[0].operators.map((op) => op.name);
       expect(operatorNames).toEqual(['batch', 'fold']);
       expect(operatorNames).not.toContain('tick'); // tick is an argument, not main chain
     });
@@ -105,20 +116,25 @@ describe('TreeSitterRustParser Unit Tests', () => {
         .all_ticks()
         .for_each(|x| println!("{:?}", x));`;
       const mockDocument = createMockDocument(code);
-      
+
       const chains = parser.parseStandaloneChains(mockDocument);
-      
+
       expect(chains).toHaveLength(1);
       expect(chains[0]).toHaveLength(4);
-      expect(chains[0].map(op => op.name)).toEqual(['snapshot', 'entries', 'all_ticks', 'for_each']);
+      expect(chains[0].map((op) => op.name)).toEqual([
+        'snapshot',
+        'entries',
+        'all_ticks',
+        'for_each',
+      ]);
     });
 
     it('should not extract variable assignments as standalone chains', () => {
       const code = `let words = process.source_iter(vec!["abc"]).map(|s| s);`;
       const mockDocument = createMockDocument(code);
-      
+
       const chains = parser.parseStandaloneChains(mockDocument);
-      
+
       expect(chains).toHaveLength(0); // This is a variable assignment, not standalone
     });
 
@@ -128,12 +144,12 @@ describe('TreeSitterRustParser Unit Tests', () => {
         other.map().filter().collect();
       `;
       const mockDocument = createMockDocument(code);
-      
+
       const chains = parser.parseStandaloneChains(mockDocument);
-      
+
       expect(chains).toHaveLength(2);
-      expect(chains[0].map(op => op.name)).toEqual(['snapshot', 'entries', 'for_each']);
-      expect(chains[1].map(op => op.name)).toEqual(['map', 'filter', 'collect']);
+      expect(chains[0].map((op) => op.name)).toEqual(['snapshot', 'entries', 'for_each']);
+      expect(chains[1].map((op) => op.name)).toEqual(['map', 'filter', 'collect']);
     });
   });
 
@@ -143,10 +159,10 @@ describe('TreeSitterRustParser Unit Tests', () => {
         .source_iter(vec!["abc"])
         .map(|s| s.to_string());`;
       const mockDocument = createMockDocument(code);
-      
+
       const bindings = parser.parseVariableBindings(mockDocument);
       const operators = bindings[0].operators;
-      
+
       // Verify positions are tracked (exact values depend on AST structure)
       expect(operators[0].line).toBeGreaterThanOrEqual(0);
       expect(operators[0].column).toBeGreaterThanOrEqual(0);
@@ -156,15 +172,15 @@ describe('TreeSitterRustParser Unit Tests', () => {
     it('should sort operators by position', () => {
       const code = `let result = data.map().filter().collect();`;
       const mockDocument = createMockDocument(code);
-      
+
       const bindings = parser.parseVariableBindings(mockDocument);
       const operators = bindings[0].operators;
-      
+
       // Operators should be sorted by line, then column
       for (let i = 1; i < operators.length; i++) {
         const prev = operators[i - 1];
         const curr = operators[i];
-        
+
         if (prev.line === curr.line) {
           expect(curr.column).toBeGreaterThanOrEqual(prev.column);
         } else {
@@ -178,10 +194,10 @@ describe('TreeSitterRustParser Unit Tests', () => {
     it('should handle empty files', () => {
       const code = '';
       const mockDocument = createMockDocument(code);
-      
+
       const bindings = parser.parseVariableBindings(mockDocument);
       const chains = parser.parseStandaloneChains(mockDocument);
-      
+
       expect(bindings).toHaveLength(0);
       expect(chains).toHaveLength(0);
     });
@@ -193,10 +209,10 @@ describe('TreeSitterRustParser Unit Tests', () => {
         println!("test");
       `;
       const mockDocument = createMockDocument(code);
-      
+
       const bindings = parser.parseVariableBindings(mockDocument);
       const chains = parser.parseStandaloneChains(mockDocument);
-      
+
       expect(bindings).toHaveLength(0); // No method chains
       expect(chains).toHaveLength(0);
     });
@@ -204,7 +220,7 @@ describe('TreeSitterRustParser Unit Tests', () => {
     it('should handle malformed code gracefully', () => {
       const code = `let incomplete = process.`;
       const mockDocument = createMockDocument(code);
-      
+
       // Should not throw, even with incomplete syntax
       expect(() => {
         parser.parseVariableBindings(mockDocument);
@@ -214,11 +230,11 @@ describe('TreeSitterRustParser Unit Tests', () => {
 
     it('should handle very long operator chains', () => {
       const operators = Array.from({ length: 10 }, (_, i) => `op${i}`); // Reduce to 10 for valid syntax
-      const code = `let result = data.${operators.map(op => `${op}()`).join('.')};`;
+      const code = `let result = data.${operators.map((op) => `${op}()`).join('.')};`;
       const mockDocument = createMockDocument(code);
-      
+
       const bindings = parser.parseVariableBindings(mockDocument);
-      
+
       expect(bindings).toHaveLength(1);
       expect(bindings[0].operators).toHaveLength(10);
     });
@@ -232,7 +248,7 @@ describe('TreeSitterRustParser Unit Tests', () => {
           name: 'process assignment',
           code: 'let process = flow.process();',
           expectedVar: 'process',
-          expectedOps: ['process']
+          expectedOps: ['process'],
         },
         {
           name: 'words chain',
@@ -240,7 +256,7 @@ describe('TreeSitterRustParser Unit Tests', () => {
             .source_iter(q!(vec!["abc"]))
             .map(q!(|s| s.to_string()));`,
           expectedVar: 'words',
-          expectedOps: ['source_iter', 'map']
+          expectedOps: ['source_iter', 'map'],
         },
         {
           name: 'batches complex chain',
@@ -253,18 +269,30 @@ describe('TreeSitterRustParser Unit Tests', () => {
             .send_bincode(&process)
             .values();`,
           expectedVar: 'batches',
-          expectedOps: ['batch', 'fold', 'entries', 'inspect', 'all_ticks', 'send_bincode', 'values']
-        }
+          expectedOps: [
+            'batch',
+            'fold',
+            'entries',
+            'inspect',
+            'all_ticks',
+            'send_bincode',
+            'values',
+          ],
+        },
       ];
 
-      testCases.forEach(testCase => {
+      testCases.forEach((testCase) => {
         const mockDocument = createMockDocument(testCase.code);
         const bindings = parser.parseVariableBindings(mockDocument);
-        
+
         expect(bindings, `Failed for ${testCase.name}`).toHaveLength(1);
-        expect(bindings[0].varName, `Wrong variable name for ${testCase.name}`).toBe(testCase.expectedVar);
-        expect(bindings[0].operators.map(op => op.name), `Wrong operators for ${testCase.name}`)
-          .toEqual(testCase.expectedOps);
+        expect(bindings[0].varName, `Wrong variable name for ${testCase.name}`).toBe(
+          testCase.expectedVar
+        );
+        expect(
+          bindings[0].operators.map((op) => op.name),
+          `Wrong operators for ${testCase.name}`
+        ).toEqual(testCase.expectedOps);
       });
     });
 
@@ -275,14 +303,218 @@ describe('TreeSitterRustParser Unit Tests', () => {
         .all_ticks()
         .assume_ordering(nondet!(/** unordered logs across keys are okay */))
         .for_each(q!(|(string, count)| println!("{}: {}", string, count)));`;
-      
+
       const mockDocument = createMockDocument(code);
       const chains = parser.parseStandaloneChains(mockDocument);
-      
+
       expect(chains).toHaveLength(1);
-      expect(chains[0].map(op => op.name)).toEqual([
-        'snapshot', 'entries', 'all_ticks', 'assume_ordering', 'for_each'
+      expect(chains[0].map((op) => op.name)).toEqual([
+        'snapshot',
+        'entries',
+        'all_ticks',
+        'assume_ordering',
+        'for_each',
       ]);
+    });
+  });
+
+  describe('Function Return Expressions', () => {
+    it('should extract explicit return expressions', () => {
+      const code = `
+        fn process_data() {
+          return data.map().filter().collect();
+        }
+      `;
+      const mockDocument = createMockDocument(code);
+
+      const chains = parser.parseStandaloneChains(mockDocument);
+
+      expect(chains).toHaveLength(1);
+      expect(chains[0].map((op) => op.name)).toEqual(['map', 'filter', 'collect']);
+    });
+
+    it('should extract implicit return expressions (last expression in function)', () => {
+      const code = `
+        fn build_ht(ops: Stream) -> KeyedSingleton {
+          ops.filter(|x| true)
+            .map(|x| x)
+            .into_keyed()
+            .fold(|| 0, |acc, i| acc + i)
+        }
+      `;
+      const mockDocument = createMockDocument(code);
+
+      const chains = parser.parseStandaloneChains(mockDocument);
+
+      expect(chains).toHaveLength(1);
+      expect(chains[0].map((op) => op.name)).toEqual(['filter', 'map', 'into_keyed', 'fold']);
+    });
+
+    it('should handle multiple functions with implicit returns', () => {
+      const code = `
+        fn build_ht(ops: Stream) -> KeyedSingleton {
+          ops.filter(|x| true).into_keyed().fold(|| 0, |a, i| a)
+        }
+        
+        fn query_ht(keys: Stream, ht: KeyedSingleton) -> Stream {
+          ht.get_many(keys).entries().map(|x| x)
+        }
+      `;
+      const mockDocument = createMockDocument(code);
+
+      const chains = parser.parseStandaloneChains(mockDocument);
+
+      expect(chains).toHaveLength(2);
+      expect(chains[0].map((op) => op.name)).toEqual(['filter', 'into_keyed', 'fold']);
+      expect(chains[1].map((op) => op.name)).toEqual(['get_many', 'entries', 'map']);
+    });
+
+    it('should not extract expression_statements as implicit returns', () => {
+      const code = `
+        fn process_data() {
+          data.map().filter().collect();  // Note the semicolon - this is NOT a return
+        }
+      `;
+      const mockDocument = createMockDocument(code);
+
+      const chains = parser.parseStandaloneChains(mockDocument);
+
+      // Should find it as a standalone chain, not an implicit return
+      expect(chains).toHaveLength(1);
+      expect(chains[0].map((op) => op.name)).toEqual(['map', 'filter', 'collect']);
+    });
+  });
+
+  describe('Function Argument and Parameter Chains', () => {
+    it('should extract chains that start with function parameters', () => {
+      const code = `
+fn ht_build<'a>(
+    ops: Stream<KVSOperation<V>, Process<'a>, Unbounded>,
+) -> KeyedSingleton<String, V, Process<'a>, Unbounded> {
+    ops.filter(q!(|op| matches!(op, KVSOperation::Put(_, _))))
+        .map(q!(|op| {
+            if let KVSOperation::Put(key, value) = op {
+                (key, value)
+            } else {
+                unreachable!()
+            }
+        }))
+        .into_keyed()
+        .fold(q!(|| Default::default()), q!(|acc, i| *acc = i))
+}`;
+
+      const doc = createMockDocument(code);
+      const chains = parser.parseStandaloneChains(doc);
+
+      // Should find the ops.filter... chain (implicit return)
+      expect(chains.length).toBeGreaterThanOrEqual(1);
+      
+      const mainChain = chains.find((chain: { some: (arg0: (op: any) => boolean) => any; }) => 
+        chain.some((op: { name: string; }) => op.name === 'filter') &&
+        chain.some((op: { name: string; }) => op.name === 'into_keyed') &&
+        chain.some((op: { name: string; }) => op.name === 'fold')
+      );
+      
+      expect(mainChain, 'Should find the main ops.filter...fold chain').toBeDefined();
+      expect(mainChain?.length).toBe(4);
+      expect(mainChain?.map((op: { name: any; }) => op.name)).toEqual(['filter', 'map', 'into_keyed', 'fold']);
+    });
+
+    it('should extract chains passed as function arguments', () => {
+      const code = `
+fn local_kvs<'a>(
+    operations: Stream<KVSOperation<V>, Process<'a>, Unbounded>,
+    server_process: &Process<'a>,
+) -> (Stream<(String, V), Process<'a>, Unbounded>, Stream<String, Process<'a>, Unbounded>) {
+    let ticker = &server_process.tick();
+    
+    let ht = Self::ht_build(operations.clone());
+    let gets = Self::batch_gets(
+        operations
+            .clone()
+            .batch(ticker, nondet!(/** comment */)),
+    );
+    return Self::ht_query(
+        gets,
+        ht.snapshot(ticker, nondet!(/** comment */)),
+    );
+}`;
+
+      const doc = createMockDocument(code);
+      const bindings = parser.parseVariableBindings(doc);
+      const chains = parser.parseStandaloneChains(doc);
+      const allChains = [...bindings.flatMap((b: { operators: any; }) => [b.operators]), ...chains];
+
+      // Should find operations.clone() in ht_build argument
+      const cloneInHtBuild = allChains.find((chain: any[]) =>
+        chain.length === 1 && chain[0].name === 'clone'
+      );
+      expect(cloneInHtBuild, 'Should find operations.clone() passed to ht_build').toBeDefined();
+
+      // Should find operations.clone().batch(...) in batch_gets argument
+      const cloneBatchChain = allChains.find((chain: { some: (arg0: (op: any) => boolean) => any; }) =>
+        chain.some((op: { name: string; }) => op.name === 'clone') &&
+        chain.some((op: { name: string; }) => op.name === 'batch')
+      );
+      expect(cloneBatchChain, 'Should find operations.clone().batch(...) chain').toBeDefined();
+      expect(cloneBatchChain?.map((op: { name: any; }) => op.name)).toEqual(['clone', 'batch']);
+
+      // Should find ht.snapshot(...) in query argument
+      const snapshotChain = allChains.find((chain: any[]) =>
+        chain.length === 1 && chain[0].name === 'snapshot'
+      );
+      expect(snapshotChain, 'Should find ht.snapshot(...) passed to ht_query').toBeDefined();
+    });
+
+    it('should NOT extract nested chains inside method call arguments', () => {
+      const code = `
+fn example() {
+    let ticker = process.tick();
+    operations
+        .batch(&ticker, nondet!(/** comment */))
+        .all_ticks();
+}`;
+
+      const doc = createMockDocument(code);
+      const chains = parser.parseStandaloneChains(doc);
+
+      // Should find the operations.batch().all_ticks() chain
+      const mainChain = chains.find((chain: { some: (arg0: (op: any) => boolean) => any; }) =>
+        chain.some((op: { name: string; }) => op.name === 'batch') &&
+        chain.some((op: { name: string; }) => op.name === 'all_ticks')
+      );
+      expect(mainChain, 'Should find main batch...all_ticks chain').toBeDefined();
+
+      // Should NOT find process.tick() as a separate chain (it's inside batch's arguments)
+      const tickChain = chains.find((chain: any[]) =>
+        chain.length === 1 && chain[0].name === 'tick'
+      );
+      expect(tickChain, 'Should NOT find process.tick() as separate chain').toBeUndefined();
+    });
+
+    it('should extract tick variables from temporal operators', () => {
+      const code = `
+fn local_kvs<'a>(
+    operations: Stream<KVSOperation<V>, Process<'a>, Unbounded>,
+    server_process: &Process<'a>,
+) {
+    let ticker = &server_process.tick();
+    operations
+        .clone()
+        .batch(ticker, nondet!(/** comment */));
+}`;
+
+      const doc = createMockDocument(code);
+      const chains = parser.parseStandaloneChains(doc);
+
+      const batchChain = chains.find((chain: { some: (arg0: (op: any) => boolean) => any; }) =>
+        chain.some((op: { name: string; }) => op.name === 'batch')
+      );
+      
+      expect(batchChain, 'Should find batch chain').toBeDefined();
+      
+      const batchOp = batchChain?.find((op: { name: string; }) => op.name === 'batch');
+      expect(batchOp?.tickVariable, 'batch operator should have tickVariable').toBe('ticker');
     });
   });
 });

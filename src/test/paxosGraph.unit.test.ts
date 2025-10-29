@@ -142,10 +142,13 @@ describe('Paxos Graph Extraction', () => {
     // (we no longer assign fake "Leader" names)
     const locationHierarchy = hier.hierarchyChoices.find((h) => h.id === 'location') as Hierarchy;
     expect(locationHierarchy).toBeTruthy();
-    
+
     // Find the unknown location container (since we're not providing LSP data)
     const unknownRoot = locationHierarchy.children.find((c) => c.name === '(unknown location)');
-    expect(unknownRoot, '(unknown location) container exists when no LSP data provided').toBeTruthy();
+    expect(
+      unknownRoot,
+      '(unknown location) container exists when no LSP data provided'
+    ).toBeTruthy();
 
     const assigned = hier.nodeAssignments.location;
     // All networking nodes should be assigned under the unknown location tree

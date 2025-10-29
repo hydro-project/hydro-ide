@@ -23,6 +23,7 @@ Both `batch` operations would be incorrectly grouped together because they both 
 ## Solution
 
 Now tick variables are **scoped by their enclosing function**:
+
 - `foo()`'s ticker becomes: `tickVariable: "foo::ticker"`
 - `bar()`'s ticker becomes: `tickVariable: "bar::ticker"`
 
@@ -31,6 +32,7 @@ These are distinct identifiers, so the operations are correctly grouped separate
 ## Display
 
 In the UI, the function scope prefix is stripped for readability:
+
 - Container name shows: `"ticker"` (not `"foo::ticker"`)
 - But internally they're distinguished by the full scoped identifier
 

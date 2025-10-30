@@ -387,32 +387,71 @@ export class LSPAnalyzer {
     operatorPosition: vscode.Position
   ): vscode.Position | null {
     try {
-      const line = document.lineAt(operatorPosition.line).text;
+      const opLineText = document.lineAt(operatorPosition.line).text;
       const opCol = operatorPosition.character;
       if (opCol <= 0) return null;
 
-      // Look for the dot immediately preceding the operator name
-      const dotIdx = line.lastIndexOf('.', opCol - 1);
-      if (dotIdx <= 0) return null;
+      // Look for the dot immediately preceding the operator name on this line
+  const dotIdx = opLineText.lastIndexOf('.', opCol - 1);
+      if (dotIdx <= 0) {
+        // If not found, nothing we can do
+        return null;
+      }
 
-      // Scan left to find the start of the receiver identifier
-      let i = dotIdx - 1;
-      // Skip whitespace
-      while (i >= 0 && /\s/.test(line[i])) i--;
+      // Helper: try to extract identifier ending just before dot on the given line
+      const tryExtractOnLine = (lineText: string, dotIndex: number) => {
+        // Scan left to find the start of the receiver identifier
+        let i = dotIndex - 1;
+        // Skip whitespace
+        while (i >= 0 && /\s/.test(lineText[i])) i--;
 
-      // Simple identifier chars (Rust identifiers and digits/underscore)
-      const isIdentChar = (ch: string) => /[A-Za-z0-9_]/.test(ch);
+        // Simple identifier chars (Rust identifiers and digits/underscore)
+        const isIdentChar = (ch: string) => /[A-Za-z0-9_]/.test(ch);
 
-      const end = i;
-      while (i >= 0 && isIdentChar(line[i])) i--;
-      const start = i + 1;
+        const end = i;
+        while (i >= 0 && isIdentChar(lineText[i])) i--;
+        const start = i + 1;
+        if (start > end || end < 0) return null as vscode.Position | null;
 
-      // Ensure we captured at least one character and it's not immediately before the dot
-      if (start > end || end < 0) return null;
+        const hoverCol = start + Math.floor((end - start + 1) / 2);
+        return new vscode.Position(operatorPosition.line, hoverCol);
+      };
 
-      // Position somewhere inside the identifier to ensure hover resolves
-      const hoverCol = start + Math.floor((end - start + 1) / 2);
-      return new vscode.Position(operatorPosition.line, hoverCol);
+      // First attempt: same-line receiver (e.g., "ops.clone()")
+      const sameLinePos = tryExtractOnLine(opLineText, dotIdx);
+      if (sameLinePos) return sameLinePos;
+
+      // Multiline chain start: receiver may be on a previous line, e.g.:
+      //   ops
+      //     .clone()
+      // Walk upward up to a few lines to find a likely identifier at EOL
+      const MAX_LOOKBACK = 3;
+      for (let lookback = 1; lookback <= MAX_LOOKBACK; lookback++) {
+        const lineNo = operatorPosition.line - lookback;
+        if (lineNo < 0) break;
+        const prevLineText = document.lineAt(lineNo).text;
+        const trimmed = prevLineText.trim();
+        if (trimmed.length === 0) continue; // skip blank lines
+        if (trimmed.startsWith('.')) continue; // still within dot chain, keep going up
+
+        // Strip trailing comments
+        const uncommented = prevLineText.replace(/\/\/.*$/, '');
+        // Find the last identifier at end-of-line (allow trailing whitespace)
+        const idMatch = uncommented.match(/([A-Za-z_][A-Za-z0-9_]*)\s*$/);
+        if (idMatch) {
+          const ident = idMatch[1];
+          // Compute start column of identifier
+          const idStartCol = uncommented.lastIndexOf(ident);
+          const idEndCol = idStartCol + ident.length - 1;
+          const hoverCol = idStartCol + Math.floor((idEndCol - idStartCol + 1) / 2);
+          return new vscode.Position(lineNo, hoverCol);
+        }
+
+        // If the previous line ends with a ')' or '}', it's likely not the simple identifier case
+        // but continue to look one more line up just in case
+      }
+
+      return null;
     } catch {
       return null;
     }
@@ -426,15 +465,16 @@ export class LSPAnalyzer {
    * @param variableBindings Pre-parsed variable bindings from tree-sitter (avoids re-parsing)
    * @returns Additional LocationInfo entries for variable names
    */
-  public colorizeVariables(
+  public async colorizeVariables(
     document: vscode.TextDocument,
     operatorResults: LocationInfo[],
     variableBindings: Array<{
       variableName: string;
       line: number;
       operators: Array<{ name: string; line: number; column: number }>;
+      usages: Array<{ line: number; column: number }>;
     }>
-  ): LocationInfo[] {
+  ): Promise<LocationInfo[]> {
     const results: LocationInfo[] = [];
 
     try {
@@ -442,44 +482,183 @@ export class LSPAnalyzer {
       this.log(`Found ${bindings.length} variable bindings for colorization`);
 
       for (const binding of bindings) {
-        if (binding.operators.length === 0) continue;
+        let locationType: string | undefined;
+        let locationKind: string | undefined;
+        let fullReturnType: string | undefined;
 
-        // Get the last operator in the chain
-        const lastOperator = binding.operators[binding.operators.length - 1];
-
-        // Find the location info for this operator
-        const operatorLocation = operatorResults.find(
-          (loc) =>
-            loc.range.start.line === lastOperator.line &&
-            Math.abs(loc.range.start.character - lastOperator.column) < 5 && // Allow small variance
-            loc.operatorName === lastOperator.name
-        );
-
-        if (operatorLocation && operatorLocation.locationKind) {
-          // Create a LocationInfo for the variable name
-          // The variable name is at the start of the let statement
+        if (binding.operators.length === 0) {
+          // Fallback: No operators extracted from RHS (likely a function-returned collection).
+          // Try to derive the variable's location type by hovering the variable name itself.
           const lineText = document.lineAt(binding.line).text;
-          const letMatch = lineText.match(/let\s+(\w+)/);
-          if (letMatch) {
-            const varNameStart = lineText.indexOf(letMatch[1]);
-            const varNameEnd = varNameStart + letMatch[1].length;
+          const varIdx = lineText.indexOf(binding.variableName);
+          if (varIdx >= 0) {
+            const varStart = varIdx;
+            const varEnd = varIdx + binding.variableName.length;
+            const varPos = new vscode.Position(binding.line, varStart + Math.floor(binding.variableName.length / 2));
+            try {
+              const typeString = await this.getTypeFromHover(document, varPos, false);
+              if (typeString) {
+                const locKind = this.parseLocationType(typeString);
+                if (locKind) {
+                  locationType = typeString;
+                  locationKind = locKind;
+                  fullReturnType = typeString;
+                  results.push({
+                    locationType,
+                    locationKind,
+                    range: new vscode.Range(binding.line, varStart, binding.line, varEnd),
+                    operatorName: binding.variableName,
+                    fullReturnType,
+                  });
+                  // this.log(
+                  //   `Colorized variable '${binding.variableName}' via hover at line ${binding.line} with location '${locKind}'`
+                  // );
+                }
+              }
+            } catch (e) {
+              // ignore and fall through
+            }
 
-            results.push({
-              locationType: operatorLocation.locationType,
-              locationKind: operatorLocation.locationKind,
-              range: new vscode.Range(binding.line, varNameStart, binding.line, varNameEnd),
-              operatorName: binding.variableName,
-              fullReturnType: operatorLocation.fullReturnType,
-            });
+            // If declaration hover didn't yield a location, try hovering a usage site (often more reliable for params)
+            if (!locationKind && binding.usages && binding.usages.length > 0) {
+              const u = binding.usages[0];
+              try {
+                const usagePos = new vscode.Position(u.line, u.column + Math.floor(binding.variableName.length / 2));
+                const usageType = await this.getTypeFromHover(document, usagePos, false);
+                const usageLoc = usageType ? this.parseLocationType(usageType) : null;
+                if (usageType && usageLoc) {
+                  locationType = usageType;
+                  locationKind = usageLoc;
+                  fullReturnType = usageType;
+                  results.push({
+                    locationType,
+                    locationKind,
+                    range: new vscode.Range(binding.line, varStart, binding.line, varEnd),
+                    operatorName: binding.variableName,
+                    fullReturnType,
+                  });
+                  // this.log(
+                  //   `Colorized variable '${binding.variableName}' via usage-hover at line ${binding.line} with location '${usageLoc}'`
+                  // );
+                }
+              } catch {
+                // ignore
+              }
+            }
+          }
+        } else {
+          // Get the last operator in the chain
+          const lastOperator = binding.operators[binding.operators.length - 1];
 
-            this.log(
-              `Colorized variable '${binding.variableName}' with location '${operatorLocation.locationKind}'`
-            );
+          // Find the location info for this operator
+          const operatorLocation = operatorResults.find(
+            (loc) =>
+              loc.range.start.line === lastOperator.line &&
+              Math.abs(loc.range.start.character - lastOperator.column) < 5 && // Allow small variance
+              loc.operatorName === lastOperator.name
+          );
+
+          if (operatorLocation && operatorLocation.locationKind) {
+            // Heuristic refinement: confirm the variable's declared/hover type has a Location.
+            // This prevents coloring tuple elements with non-location types (e.g., ExternalBincodeSink<...>)
+            // when the RHS chain overall has a location.
+
+            // Compute the variable's position on its declaration line
+            const declLineText = document.lineAt(binding.line).text;
+            const varNameStartIdx = declLineText.indexOf(binding.variableName);
+            let declLocKind: string | null = null;
+            let declTypeString: string | null = null;
+            if (varNameStartIdx >= 0) {
+              const varCenter = varNameStartIdx + Math.floor(binding.variableName.length / 2);
+              const varPos = new vscode.Position(binding.line, varCenter);
+              try {
+                declTypeString = await this.getTypeFromHover(document, varPos, false);
+                if (declTypeString) {
+                  declLocKind = this.parseLocationType(declTypeString);
+                }
+              } catch {
+                // ignore hover failures and fall back to operator-derived location
+              }
+            }
+
+            // If the declaration hover exposes a concrete Location, prefer it.
+            // If the declaration does NOT expose a Location at all, try usage-hover fallback
+            if (declLocKind) {
+              locationType = declTypeString || operatorLocation.locationType;
+              locationKind = declLocKind;
+              fullReturnType = declTypeString || operatorLocation.fullReturnType;
+            } else {
+              // Attempt to derive type from a usage token (e.g., variables used as args/receivers)
+              if (binding.usages && binding.usages.length > 0) {
+                const u = binding.usages[0];
+                try {
+                  const usagePos = new vscode.Position(u.line, u.column + Math.floor(binding.variableName.length / 2));
+                  const usageType = await this.getTypeFromHover(document, usagePos, false);
+                  const usageLoc = usageType ? this.parseLocationType(usageType) : null;
+                  if (usageType && usageLoc) {
+                    locationType = usageType;
+                    locationKind = usageLoc;
+                    fullReturnType = usageType;
+                  }
+                } catch {
+                  // ignore
+                }
+              }
+
+              if (!locationKind) {
+                // No declared or usage-derived location found. Be conservative: do not color.
+                this.log(
+                  `Skip coloring variable '${binding.variableName}' — no declared/usage location (declType='${declTypeString ?? 'n/a'}')`
+                );
+                locationType = undefined;
+                locationKind = undefined;
+              }
+            }
+
+            // Emit color for the variable if we have a confirmed location
+            if (locationType && locationKind) {
+              const varNameStart = varNameStartIdx;
+              if (varNameStart >= 0) {
+                const varNameEnd = varNameStart + binding.variableName.length;
+                results.push({
+                  locationType,
+                  locationKind,
+                  range: new vscode.Range(binding.line, varNameStart, binding.line, varNameEnd),
+                  operatorName: binding.variableName,
+                  fullReturnType,
+                });
+                // this.log(
+                //   `Colorized variable '${binding.variableName}' at line ${binding.line} with location '${locationKind}'`
+                // );
+              }
+            }
+          }
+        }
+
+        // Color all usages (references, arguments, etc.)
+        if (locationType && locationKind && binding.usages) {
+          for (const usage of binding.usages) {
+            const lineText = document.lineAt(usage.line).text;
+            // Color variable usage in function arguments and references
+            const varNameStart = lineText.indexOf(binding.variableName, usage.column);
+            if (varNameStart >= 0) {
+              const varNameEnd = varNameStart + binding.variableName.length;
+              results.push({
+                locationType,
+                locationKind,
+                range: new vscode.Range(usage.line, varNameStart, usage.line, varNameEnd),
+                operatorName: binding.variableName,
+                fullReturnType,
+              });
+              this.log(
+                `Colorized usage of variable '${binding.variableName}' at ${usage.line}:${usage.column} (argument/ref) with location '${locationKind}'`
+              );
+            }
           }
         }
       }
 
-      this.log(`Added ${results.length} variable colorizations`);
+      this.log(`Added ${results.length} variable colorizations (including usages)`);
     } catch (error) {
       this.log(`WARNING: Error colorizing variables: ${error}`);
     }

@@ -17,7 +17,7 @@
  */
 
 import * as vscode from 'vscode';
-import { TreeSitterRustParser } from './treeSitterParser';
+import { TreeSitterRustParser, VariableBindingNode } from './treeSitterParser';
 import { LSPAnalyzer, LocationInfo, CacheStats } from './lspAnalyzer';
 
 /**
@@ -42,6 +42,8 @@ interface VariableBinding {
   line: number;
   /** Operators in the assignment chain */
   operators: OperatorCall[];
+  /** Usages of this variable (references, arguments, etc.) */
+  usages: Array<{ line: number; column: number }>;
 }
 
 /**
@@ -87,7 +89,7 @@ export async function analyzeDocument(document: vscode.TextDocument): Promise<Lo
   }
 
   // Step 1: Use tree-sitter to find all operator positions
-  const rawBindings = treeSitterParser.parseVariableBindings(document);
+  const rawBindings: VariableBindingNode[] = treeSitterParser.parseVariableBindings(document);
   const rawChains = treeSitterParser.parseStandaloneChains(document);
 
   // Convert to simplified format and collect all positions
@@ -106,6 +108,7 @@ export async function analyzeDocument(document: vscode.TextDocument): Promise<Lo
       variableName: binding.varName,
       line: binding.line,
       operators,
+      usages: binding.usages,
     });
 
     // Add positions for hover queries
@@ -117,7 +120,7 @@ export async function analyzeDocument(document: vscode.TextDocument): Promise<Lo
     }
   }
 
-  // Process standalone chains
+  // Process standalone chains and implicit returns
   for (const chain of rawChains) {
     for (const op of chain) {
       allPositions.push({
@@ -135,7 +138,11 @@ export async function analyzeDocument(document: vscode.TextDocument): Promise<Lo
   const hoverResults = await lspAnalyzer.analyzePositions(document, allPositions);
 
   // Step 3: Colorize variables based on their operator chains
-  const variableResults = lspAnalyzer.colorizeVariables(document, hoverResults, variableBindings);
+  const variableResults = await lspAnalyzer.colorizeVariables(
+    document,
+    hoverResults,
+    variableBindings
+  );
 
   return [...hoverResults, ...variableResults];
 }

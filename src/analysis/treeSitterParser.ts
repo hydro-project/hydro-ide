@@ -69,6 +69,10 @@ export interface VariableBindingNode {
   line: number;
   /** Operators in the chain assigned to this variable */
   operators: OperatorNode[];
+  /** Usages of this variable (references, arguments, etc.) */
+  usages: Array<{ line: number; column: number }>;
+  /** Enclosing function scope start/end lines (inclusive), used for filtering usages */
+  scope?: { startLine: number; endLine: number };
 }
 
 /**
@@ -90,6 +94,7 @@ export class TreeSitterRustParser {
 
   /**
    * Parse document and extract all variable bindings with their operator chains
+   * Also extract all usages of those variables (references and arguments)
    *
    * @param document The document to parse
    * @returns Array of variable bindings
@@ -98,22 +103,146 @@ export class TreeSitterRustParser {
     const sourceCode = document.getText();
     const tree = this.parser.parse(sourceCode);
     const bindings: VariableBindingNode[] = [];
+  const usageMap: Map<string, Array<{ line: number; column: number; funcStart?: number; funcEnd?: number }>> = new Map();
 
     this.log(`Parsing document with tree-sitter: ${document.fileName}`);
+
+    const getEnclosingFunctionRange = (node: SyntaxNode): { startLine: number; endLine: number } | undefined => {
+      let cur: SyntaxNode | null = node;
+      while (cur) {
+        if (cur.type === 'function_item') {
+          return { startLine: cur.startPosition.row, endLine: cur.endPosition.row };
+        }
+        cur = cur.parent;
+      }
+      return undefined;
+    };
 
     // Walk the AST to find let statements
     this.walkTree(tree.rootNode, (node) => {
       // Look for let_declaration nodes
       if (node.type === 'let_declaration') {
-        const newBindings = this.extractVariableBindingsFromLet(node, document);
+        const fnScope = getEnclosingFunctionRange(node) ;
+        const newBindings = this.extractVariableBindingsFromLet(node, document).map((b) => ({
+          ...b,
+          scope: fnScope,
+        }));
         for (const b of newBindings) {
           bindings.push(b);
-          this.log(`Found binding: ${b.varName} with ${b.operators.length} operators`);
+          usageMap.set(b.varName, []);
+          // this.log(`Found binding: ${b.varName} at line ${b.line} with ${b.operators.length} operators`);
         }
       }
     });
 
-    this.log(`Extracted ${bindings.length} variable bindings`);
+    // Also collect function parameters as bindings so they can be colored via hover
+    const addParamIdentifier = (idNode: SyntaxNode) => {
+      const range = new vscode.Range(
+        new vscode.Position(idNode.startPosition.row, idNode.startPosition.column),
+        new vscode.Position(idNode.endPosition.row, idNode.endPosition.column)
+      );
+      const name = document.getText(range);
+      if (!name) return;
+      // this.log(`  >> addParamIdentifier: identifier "${name}" node reports line ${idNode.startPosition.row}, text extracted from line ${range.start.line}`);
+      if (!usageMap.has(name)) usageMap.set(name, []);
+      // Check if this exact binding (same name AND line) already exists to avoid duplicates
+      if (!bindings.some((b) => b.varName === name && b.line === idNode.startPosition.row)) {
+        const fnScope = getEnclosingFunctionRange(idNode);
+        bindings.push({ varName: name, line: idNode.startPosition.row, operators: [], usages: [], scope: fnScope });
+        // this.log(`Found parameter: ${name} at line ${idNode.startPosition.row} with 0 operators`);
+      }
+    };
+    const collectParamPattern = (node: SyntaxNode) => {
+      if (node.type === 'identifier') {
+        addParamIdentifier(node);
+        return;
+      }
+      const PARAM_PATTERN_TYPES = new Set([
+        'tuple_pattern',
+        'parenthesized_pattern',
+        'slice_pattern',
+        'reference_pattern',
+        'or_pattern',
+        'mutable_specifier',
+        'tuple_struct_pattern',
+        'struct_pattern',
+        'field_pattern',
+        'box_pattern',
+        'ascription_pattern',
+      ]);
+      if (PARAM_PATTERN_TYPES.has(node.type)) {
+        for (const ch of node.children) collectParamPattern(ch);
+      }
+    };
+
+    this.walkTree(tree.rootNode, (node) => {
+      if (node.type === 'function_item') {
+        // const fnName = node.children.find((c) => c.type === 'identifier');
+        // const fnNameText = fnName ? document.getText(new vscode.Range(
+        //   new vscode.Position(fnName.startPosition.row, fnName.startPosition.column),
+        //   new vscode.Position(fnName.endPosition.row, fnName.endPosition.column)
+        // )) : '?';
+        // this.log(`Processing function ${fnNameText} at line ${node.startPosition.row}`);
+        const params = node.children.find((c) => c.type === 'parameters');
+        if (params) {
+          // this.log(`  Found parameters node with ${params.children.length} children`);
+          for (const ch of params.children) {
+            // this.log(`    Child type: ${ch.type} at line ${ch.startPosition.row}`);
+            if (ch.type === '(' || ch.type === ')' || ch.type === ',') continue;
+            if (ch.type === 'parameter') {
+              // In a parameter node, the pattern is typically the first child
+              // this.log(`      Parameter has ${ch.children.length} children`);
+              // for (const subCh of ch.children) {
+              //   this.log(`        SubChild type: ${subCh.type} at line ${subCh.startPosition.row}`);
+              // }
+              const pat = ch.children.find((c) => c.type !== ':' && c.type !== ',');
+              if (pat) {
+                // this.log(`      Collecting pattern ${pat.type} at line ${pat.startPosition.row}`);
+                collectParamPattern(pat);
+              }
+            } else {
+              collectParamPattern(ch);
+            }
+          }
+        }
+      }
+    });
+
+    // Walk the AST to find all usages of variables (identifiers matching binding names)
+    this.walkTree(tree.rootNode, (node) => {
+      if (node.type === 'identifier') {
+        const name = document.getText(
+          new vscode.Range(
+            new vscode.Position(node.startPosition.row, node.startPosition.column),
+            new vscode.Position(node.endPosition.row, node.endPosition.column)
+          )
+        );
+        if (usageMap.has(name)) {
+          const fnScope = getEnclosingFunctionRange(node);
+          usageMap.get(name)!.push({
+            line: node.startPosition.row,
+            column: node.startPosition.column,
+            funcStart: fnScope?.startLine,
+            funcEnd: fnScope?.endLine,
+          });
+        }
+      }
+    });
+
+    // Attach usages to each binding, filtering to the same enclosing function and to lines at/after declaration
+    for (const binding of bindings) {
+      const allUsages = usageMap.get(binding.varName) || [];
+      const scope = binding.scope;
+      binding.usages = allUsages.filter((u) => {
+        const inSameFunction = scope
+          ? u.funcStart === scope.startLine && u.funcEnd === scope.endLine
+          : true;
+        const afterDecl = u.line >= binding.line;
+        return inSameFunction && afterDecl;
+      });
+    }
+
+    this.log(`Extracted ${bindings.length} variable bindings and usages`);
     return bindings;
   }
 
@@ -276,8 +405,9 @@ export class TreeSitterRustParser {
       const child = letNode.child(i);
       if (!child) continue;
 
-      // Value expression can be call_expression or field_expression (start of chain)
-      if (!valueNode && (child.type === 'call_expression' || child.type === 'field_expression')) {
+      // Value expression can be call_expression, field_expression, or reference_expression
+      // (for cases like `let ticker = &server_process.tick()`)
+      if (!valueNode && (child.type === 'call_expression' || child.type === 'field_expression' || child.type === 'reference_expression')) {
         valueNode = child;
       }
     }
@@ -308,6 +438,8 @@ export class TreeSitterRustParser {
         'struct_pattern',
         'field_pattern',
         'box_pattern',
+        // Handle typed patterns like `x: Type` inside destructuring
+        'ascription_pattern',
       ]);
       if (PATTERN_TYPES.has(node.type)) {
         for (const ch of node.children) collectFromNode(ch);
@@ -333,10 +465,10 @@ export class TreeSitterRustParser {
     }
 
     // Extract operator chain from the value expression or its main chain
+    // Note: For function-returned collections (e.g., `let (a, b) = make_streams(...);`),
+    // there may be no method-chain operators to extract. We still want to emit variable
+    // bindings so the LSP analyzer can hover the variable identifiers and colorize them.
     const operators = this.extractOperatorChain(valueNode);
-    if (operators.length === 0) {
-      return [];
-    }
 
     // If no identifiers were found (unlikely), fallback to a single synthetic binding name
     const varNames = patternIdentifiers.length > 0 ? patternIdentifiers : ['_'];
@@ -345,6 +477,7 @@ export class TreeSitterRustParser {
       varName,
       line: letNode.startPosition.row,
       operators,
+      usages: [],
     }));
   }
 
@@ -365,9 +498,38 @@ export class TreeSitterRustParser {
     // If this is a let_declaration, find the value expression first
     if (node.type === 'let_declaration') {
       // Find the call_expression that represents the value being assigned
-      const valueNode = node.children.find((child: SyntaxNode) => child.type === 'call_expression');
+      let valueNode: SyntaxNode | undefined = node.children.find((child: SyntaxNode) =>
+        child.type === 'call_expression' || child.type === 'field_expression' || child.type === 'parenthesized_expression' || child.type === 'reference_expression' || child.type === 'unary_expression'
+      );
+      // If not found directly, try to locate the expression after '=' heuristically
+      if (!valueNode) {
+        for (let i = 0; i < node.childCount; i++) {
+          const ch = node.child(i);
+          if (ch?.type === '=') {
+            valueNode = node.child(i + 1) ?? undefined;
+            break;
+          }
+        }
+      }
       if (valueNode) {
-        this.extractFromMainChain(valueNode, operators);
+        // Unwrap trivial wrappers to get to the underlying chain/call
+        // Keep drilling down while we see simple wrappers and have a meaningful inner expression
+        let current: SyntaxNode | undefined = valueNode;
+        while (
+          current &&
+          (current.type === 'parenthesized_expression' ||
+            current.type === 'reference_expression' ||
+            current.type === 'unary_expression')
+        ) {
+          const innerNode: SyntaxNode | undefined = current.children.find(
+            (c: SyntaxNode) => c.type !== '(' && c.type !== ')' && c.type !== '&' && c.type !== '*'
+          );
+          if (!innerNode) break;
+          current = innerNode;
+        }
+        if (current) {
+          this.extractFromMainChain(current, operators);
+        }
       }
     } else {
       // Walk the main chain structure, avoiding arguments
@@ -389,14 +551,25 @@ export class TreeSitterRustParser {
    * Extract operators from the main method chain and tick variables for temporal operators
    */
   private extractFromMainChain(node: SyntaxNode, operators: OperatorNode[]): void {
+    // Debug: log node type to diagnose ticker issue
+    if (node.type === 'call_expression' || node.type === 'field_expression') {
+      const dbgText = node.text?.substring(0, 40) ?? '';
+      this.log(`  [extractFromMainChain] Processing ${node.type}: "${dbgText}"`);
+    }
+
     if (node.type === 'call_expression') {
       // This is a method call - extract from the method part and check for tick arguments
+      // Debug: log all children to see structure
+      this.log(`    call_expression children: ${node.children.map(c => c.type).join(', ')}`);
+      
       const method = node.children.find((child: SyntaxNode) => child.type === 'field_expression');
+      this.log(`    Found method child: ${method ? method.type : 'none'}`);
       if (method) {
         // Get the operator name first
         const fieldIdentifier = method.children.find(
           (child: SyntaxNode) => child.type === 'field_identifier'
         );
+        this.log(`    Found field_identifier: ${fieldIdentifier ? fieldIdentifier.text : 'none'}`);
 
         if (fieldIdentifier) {
           const operatorName = fieldIdentifier.text;

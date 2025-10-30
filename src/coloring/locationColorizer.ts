@@ -106,6 +106,12 @@ function applyDecorations(
   rangesByLocation.forEach((ranges, locationKind) => {
     const colorIndex = locationToColorIndex.get(locationKind)!;
     const decorationType = getDecorationForLocation(locationKind, colorIndex);
+    log(`Applying ${ranges.length} decorations for location '${locationKind}'`);
+    // for (const range of ranges) {
+    //   const lineText = editor.document.lineAt(range.start.line).text;
+    //   const highlightedText = lineText.substring(range.start.character, range.end.character);
+    //   log(`  Line ${range.start.line + 1} (0-based: ${range.start.line}), cols ${range.start.character}-${range.end.character}: "${highlightedText}"`);
+    // }
     editor.setDecorations(decorationType, ranges);
   });
 }

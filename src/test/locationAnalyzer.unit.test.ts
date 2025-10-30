@@ -347,6 +347,8 @@ describe('LocationAnalyzer Color Assignment', () => {
     expect(locationToColorIndex.get('Process<Leader>')).toBe(0);
     expect(locationToColorIndex.size).toBe(1);
   });
+
+    
 });
 
 /**

@@ -1,27 +1,41 @@
 {
-  "version": "2.0.0",
-  "tasks": [
-    {
-      "type": "npm",
-      "script": "watch",
-      "problemMatcher": "$tsc-watch",
-      "isBackground": true,
-      "presentation": {
-        "reveal": "never"
-      },
-      "group": {
-        "kind": "build",
-        "isDefault": true
-      }
-    },
-    {
-      "type": "npm",
-      "script": "compile",
-      "problemMatcher": "$tsc",
-      "presentation": {
-        "reveal": "silent"
-      },
-      "group": "build"
-    }
-  ]
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "npm",
+			"script": "watch",
+			"problemMatcher": "$tsc-watch",
+			"isBackground": true,
+			"presentation": {
+				"reveal": "never"
+			},
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			}
+		},
+		{
+			"type": "npm",
+			"script": "compile",
+			"problemMatcher": "$tsc",
+			"presentation": {
+				"reveal": "silent"
+			},
+			"group": "build"
+		},
+		{
+			"label": "Run unit tests (vitest)",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"test:unit"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$tsc"
+			],
+			"group": "build"
+		}
+	]
 }

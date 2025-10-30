@@ -2,7 +2,7 @@
   "name": "hydro-ide",
   "displayName": "Hydro IDE",
   "description": "IDE support for Hydro dataflow programming, including visualization with Hydroscope",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "hydro-project",
   "license": "Apache-2.0",
   "icon": "icon.png",

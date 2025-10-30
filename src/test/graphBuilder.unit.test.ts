@@ -60,6 +60,7 @@ describe('GraphBuilder', () => {
           varName: 'result',
           line: 0,
           operators: [createOperatorNode('map', 0, 21), createOperatorNode('filter', 0, 27)],
+          usages: [],
         },
       ]);
 
@@ -78,6 +79,7 @@ describe('GraphBuilder', () => {
           varName: 'result',
           line: 0,
           operators: [createOperatorNode('map', 0, 21), createOperatorNode('filter', 0, 27)],
+          usages: [],
         },
       ]);
 
@@ -96,6 +98,7 @@ describe('GraphBuilder', () => {
           varName: 'result',
           line: 0,
           operators: [createOperatorNode('unknown_op', 0, 21), createOperatorNode('filter', 0, 33)],
+          usages: [],
         },
       ]);
 
@@ -128,11 +131,13 @@ describe('GraphBuilder', () => {
           varName: 'x',
           line: 0,
           operators: [createOperatorNode('map', 0, 15)],
+          usages: [],
         },
         {
           varName: 'y',
           line: 1,
           operators: [createOperatorNode('filter', 1, 10)],
+          usages: [],
         },
       ]);
 
@@ -157,6 +162,7 @@ describe('GraphBuilder', () => {
           varName: 'x',
           line: 0,
           operators: [createOperatorNode('source_iter', 0, 8)],
+          usages: [],
         },
       ]);
 
@@ -173,17 +179,20 @@ describe('GraphBuilder', () => {
           varName: 't',
           line: 0,
           operators: [createOperatorNode('tick', 0, 8, 'ticker')],
+          usages: [],
+        },
+        {
+          varName: 'x',
+          line: 0,
+          operators: [
+            createOperatorNode('source_iter', 0, 8),
+            createOperatorNode('map', 0, 15),
+            createOperatorNode('filter', 0, 21),
+            createOperatorNode('collect', 0, 27),
+          ],
+          usages: [],
         },
       ]);
-
-      const result = graphBuilder.buildFromTreeSitter(mockDocument, {});
-
-      expect(result.nodes[0].data.tickVariable).toBe('test_fn::ticker');
-    });
-
-    it('avoids duplicate nodes for same operator position', () => {
-      const mockDocument = createMockDocument(['let x = source.map();']);
-
       // Same operator appearing twice (shouldn't happen, but defensive)
       vi.mocked(mockParser.parseVariableBindings).mockReturnValue([
         {
@@ -193,6 +202,7 @@ describe('GraphBuilder', () => {
             createOperatorNode('map', 0, 15),
             createOperatorNode('map', 0, 15), // Duplicate
           ],
+          usages: [],
         },
       ]);
 

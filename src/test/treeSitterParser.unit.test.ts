@@ -150,14 +150,14 @@ describe('TreeSitterRustParser Unit Tests', () => {
       const chains = parser.parseStandaloneChains(mockDocument);
 
       expect(chains).toHaveLength(2);
-      
+
       // Parser can capture duplicate tokens when extracting chains.
       // Check that the expected operators appear in order (tolerating duplicates).
       const chain0Names = chains[0].map((op) => op.name);
       expect(chain0Names.indexOf('snapshot')).toBeGreaterThanOrEqual(0);
       expect(chain0Names.indexOf('entries')).toBeGreaterThan(chain0Names.indexOf('snapshot'));
       expect(chain0Names.lastIndexOf('for_each')).toBeGreaterThan(chain0Names.indexOf('entries'));
-      
+
       const chain1Names = chains[1].map((op) => op.name);
       expect(chain1Names.indexOf('map')).toBeGreaterThanOrEqual(0);
       expect(chain1Names.indexOf('filter')).toBeGreaterThan(chain1Names.indexOf('map'));
@@ -461,12 +461,14 @@ fn local_kvs<'a>(
       const doc = createMockDocument(code);
       const bindings = parser.parseVariableBindings(doc);
       const chains = parser.parseStandaloneChains(doc);
-      const allChains = [...bindings.flatMap((b: { operators: OperatorNode[] }) => [b.operators]), ...chains];
+      const allChains = [
+        ...bindings.flatMap((b: { operators: OperatorNode[] }) => [b.operators]),
+        ...chains,
+      ];
 
       // Should include a 'clone' call in arguments (either as a single-op chain or as part of a longer chain)
-      const hasCloneCall = allChains.some(
-        (chain: OperatorNode[]) =>
-          chain.some((op: { name: string }) => op.name === 'clone')
+      const hasCloneCall = allChains.some((chain: OperatorNode[]) =>
+        chain.some((op: { name: string }) => op.name === 'clone')
       );
       expect(hasCloneCall, 'Should include operations.clone() passed to ht_build').toBeTruthy();
 
@@ -548,13 +550,7 @@ fn local_kvs<'a>(
   describe('Real-file parsing: ide-test/src/local.rs', () => {
     it('should emit destructured binding names and parameter identifiers', () => {
       // Load the actual Rust file used in manual verification
-      const rustFile = path.join(
-        __dirname,
-        '../../..',
-        'ide-test',
-        'src',
-        'local.rs'
-      );
+      const rustFile = path.join(__dirname, '../../..', 'ide-test', 'src', 'local.rs');
 
       // If the file isn't present in this workspace (e.g., CI or partial checkout), skip gracefully
       if (!fs.existsSync(rustFile)) {

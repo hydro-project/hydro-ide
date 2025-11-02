@@ -27,7 +27,8 @@ vi.mock('vscode', () => {
       get: (key: string, defaultValue?: unknown) => {
         if (section === 'hydroIde.operators') {
           if (key === 'networkingOperators') return [] as string[];
-          if (key === 'coreDataflowOperators') return ['map', 'filter', 'into_keyed', 'fold', 'clone'];
+          if (key === 'coreDataflowOperators')
+            return ['map', 'filter', 'into_keyed', 'fold', 'clone'];
           if (key === 'sinkOperators') return ['for_each'];
         }
         return defaultValue;

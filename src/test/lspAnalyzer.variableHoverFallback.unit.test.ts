@@ -28,22 +28,38 @@ vi.mock('vscode', () => {
     } as unknown as import('vscode').WorkspaceConfiguration;
   };
   const commands = {
-    executeCommand: vi.fn(async (cmd: string, _uri: unknown, position: { line: number; character: number }) => {
-      if (cmd !== 'vscode.executeHoverProvider') return [];
-      if (position.line === 0) {
-        // Hovering 'ht' variable name shows its concrete type
-        return [
-          { contents: [{ value: "```rust\nlet ht: KeyedSingleton<String, V, Tick<Process<'a, Leader>>, Bounded>\n```" }] },
-        ];
+    executeCommand: vi.fn(
+      async (cmd: string, _uri: unknown, position: { line: number; character: number }) => {
+        if (cmd !== 'vscode.executeHoverProvider') return [];
+        if (position.line === 0) {
+          // Hovering 'ht' variable name shows its concrete type
+          return [
+            {
+              contents: [
+                {
+                  value:
+                    "```rust\nlet ht: KeyedSingleton<String, V, Tick<Process<'a, Leader>>, Bounded>\n```",
+                },
+              ],
+            },
+          ];
+        }
+        if (position.line === 1) {
+          // Hovering 'gets' variable name shows its concrete type
+          return [
+            {
+              contents: [
+                {
+                  value:
+                    "```rust\nlet gets: Stream<(String, ()), Tick<Process<'a, Leader>>, Bounded>\n```",
+                },
+              ],
+            },
+          ];
+        }
+        return [];
       }
-      if (position.line === 1) {
-        // Hovering 'gets' variable name shows its concrete type
-        return [
-          { contents: [{ value: "```rust\nlet gets: Stream<(String, ()), Tick<Process<'a, Leader>>, Bounded>\n```" }] },
-        ];
-      }
-      return [];
-    })
+    ),
   };
   return { Range: MockRange, Position: MockPosition, workspace: { getConfiguration }, commands };
 });
@@ -79,8 +95,18 @@ describe('LSPAnalyzer variable hover fallback', () => {
     const doc = createMockDocument(lines);
 
     const variableBindings = [
-      { variableName: 'ht', line: 0, operators: [] as Array<{ name: string; line: number; column: number }>, usages: [] },
-      { variableName: 'gets', line: 1, operators: [] as Array<{ name: string; line: number; column: number }>, usages: [] },
+      {
+        variableName: 'ht',
+        line: 0,
+        operators: [] as Array<{ name: string; line: number; column: number }>,
+        usages: [],
+      },
+      {
+        variableName: 'gets',
+        line: 1,
+        operators: [] as Array<{ name: string; line: number; column: number }>,
+        usages: [],
+      },
     ];
 
     const results = await analyzer.colorizeVariables(doc, [], variableBindings);

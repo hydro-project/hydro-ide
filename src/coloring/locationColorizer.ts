@@ -14,7 +14,9 @@ import { showStatus } from '../extension';
  */
 function isDarkTheme(): boolean {
   const theme = vscode.window.activeColorTheme;
-  return theme.kind === vscode.ColorThemeKind.Dark || theme.kind === vscode.ColorThemeKind.HighContrast;
+  return (
+    theme.kind === vscode.ColorThemeKind.Dark || theme.kind === vscode.ColorThemeKind.HighContrast
+  );
 }
 
 /**
@@ -42,8 +44,6 @@ export function initializeDecorationTypes(channel?: vscode.OutputChannel): void 
   decorationTypesByLocation.clear();
 }
 
-
-
 /**
  * Get or create a decoration type for a specific location
  * Theme-aware: uses appropriate colors and borders for light/dark themes
@@ -54,13 +54,13 @@ function getDecorationForLocation(
 ): vscode.TextEditorDecorationType {
   if (!decorationTypesByLocation.has(locationKind)) {
     const isDark = isDarkTheme();
-    
+
     // Get color from palette
     const backgroundColor = getColorByIndex(colorIndex, isDark);
-    
+
     // Get border style (this handles Process/Cluster/External differences)
     const borderStyle = getBorderStyle(locationKind, isDark);
-    
+
     const decorationType = vscode.window.createTextEditorDecorationType({
       backgroundColor,
       ...borderStyle,
@@ -127,7 +127,7 @@ export async function colorizeFile(editor: vscode.TextEditor): Promise<void> {
 
   try {
     // Don't show output channel - user can open it manually if needed
-    
+
     log(`========================================`);
     log(`Colorizing file: ${document.fileName}`);
 
@@ -157,7 +157,7 @@ export async function colorizeFile(editor: vscode.TextEditor): Promise<void> {
 
     log(`Colorized ${locationInfos.length} identifiers: ${summary}`);
     log(`========================================`);
-    
+
     // Show ready status with auto-hide
     showStatus('$(check) Locations ready', true);
   } catch (error) {
@@ -167,7 +167,7 @@ export async function colorizeFile(editor: vscode.TextEditor): Promise<void> {
       log(`Stack trace: ${error.stack}`);
     }
     log(`========================================`);
-    
+
     // Show error status with auto-hide
     showStatus('$(error) Analysis failed', true);
   }
@@ -196,7 +196,7 @@ export function clearCache(fileUri?: string): void {
   // Clear decoration types so they get recreated with new theme colors
   decorationTypesByLocation.forEach((d) => d.dispose());
   decorationTypesByLocation.clear();
-  
+
   // Clear analyzer cache
   locationAnalyzer.clearCache(fileUri);
 }

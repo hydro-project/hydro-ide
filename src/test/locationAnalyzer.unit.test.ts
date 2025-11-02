@@ -5,7 +5,11 @@
  */
 
 import { describe, test, expect } from 'vitest';
-import { COLOR_PALETTE, getBorderStyle, getColorByIndex } from '../coloring/locationColorizerConfig';
+import {
+  COLOR_PALETTE,
+  getBorderStyle,
+  getColorByIndex,
+} from '../coloring/locationColorizerConfig';
 
 /**
  * Test Location type parsing logic
@@ -61,7 +65,9 @@ describe('LocationAnalyzer Type Parsing', () => {
     unwrapped = unwrapped.replace(/^&(?:mut\s+)?/, '');
 
     // For Stream/KeyedStream/Optional/Singleton/KeyedSingleton types, extract the location parameter
-    const collectionMatch = unwrapped.match(/^(Stream|KeyedStream|Optional|Singleton|KeyedSingleton)<(.+)>$/);
+    const collectionMatch = unwrapped.match(
+      /^(Stream|KeyedStream|Optional|Singleton|KeyedSingleton)<(.+)>$/
+    );
     if (collectionMatch) {
       const params = collectionMatch[2];
       const typeParams = parseTypeParameters(params);
@@ -347,8 +353,6 @@ describe('LocationAnalyzer Color Assignment', () => {
     expect(locationToColorIndex.get('Process<Leader>')).toBe(0);
     expect(locationToColorIndex.size).toBe(1);
   });
-
-    
 });
 
 /**
@@ -585,7 +589,9 @@ describe('LocationAnalyzer Stream Type Parameter Extraction', () => {
     let unwrapped = fullType;
     unwrapped = unwrapped.replace(/^&(?:mut\s+)?/, '');
 
-    const collectionMatch = unwrapped.match(/^(Stream|KeyedStream|Optional|Singleton|KeyedSingleton)<(.+)>$/);
+    const collectionMatch = unwrapped.match(
+      /^(Stream|KeyedStream|Optional|Singleton|KeyedSingleton)<(.+)>$/
+    );
     if (collectionMatch) {
       const params = collectionMatch[2];
       const typeParams = parseTypeParameters(params);
@@ -647,7 +653,8 @@ describe('LocationAnalyzer Stream Type Parameter Extraction', () => {
   });
 
   test('Should parse type parameters with deeply nested types', () => {
-    const params = "(String, i32), Tick<Process<'a, Leader>>, Bounded::UnderlyingBound, NoOrder, ExactlyOnce";
+    const params =
+      "(String, i32), Tick<Process<'a, Leader>>, Bounded::UnderlyingBound, NoOrder, ExactlyOnce";
     const result = parseTypeParameters(params);
     expect(result).toEqual([
       '(String, i32)',
@@ -724,7 +731,8 @@ describe('LocationAnalyzer Stream Type Parameter Extraction', () => {
   });
 
   test('Should handle KeyedSingleton with WhenValueUnbounded bound', () => {
-    const fullType = "KeyedSingleton<String, i32, Tick<Cluster<'a, Worker>>, Bounded::WhenValueUnbounded>";
+    const fullType =
+      "KeyedSingleton<String, i32, Tick<Cluster<'a, Worker>>, Bounded::WhenValueUnbounded>";
     const result = parseLocationType(fullType);
     expect(result).toBe('Tick<Cluster<Worker>>');
   });
@@ -774,7 +782,9 @@ describe('LocationAnalyzer Map-Reduce Tick Scenarios', () => {
     let unwrapped = fullType;
     unwrapped = unwrapped.replace(/^&(?:mut\s+)?/, '');
 
-    const collectionMatch = unwrapped.match(/^(Stream|KeyedStream|Optional|Singleton|KeyedSingleton)<(.+)>$/);
+    const collectionMatch = unwrapped.match(
+      /^(Stream|KeyedStream|Optional|Singleton|KeyedSingleton)<(.+)>$/
+    );
     if (collectionMatch) {
       const params = collectionMatch[2];
       const typeParams = parseTypeParameters(params);
@@ -830,13 +840,15 @@ describe('LocationAnalyzer Map-Reduce Tick Scenarios', () => {
   });
 
   test('batch() with cluster.tick() should return KeyedStream with Tick<Cluster<Worker>>', () => {
-    const batchType = "KeyedStream<String, (), Tick<Cluster<'a, Worker>>, Bounded, TotalOrder, ExactlyOnce>";
+    const batchType =
+      "KeyedStream<String, (), Tick<Cluster<'a, Worker>>, Bounded, TotalOrder, ExactlyOnce>";
     const result = parseLocationType(batchType);
     expect(result).toBe('Tick<Cluster<Worker>>');
   });
 
   test('fold() on batched stream should return KeyedSingleton with Tick<Cluster<Worker>>', () => {
-    const foldType = "KeyedSingleton<String, i32, Tick<Cluster<'a, Worker>>, Bounded::WhenValueUnbounded>";
+    const foldType =
+      "KeyedSingleton<String, i32, Tick<Cluster<'a, Worker>>, Bounded::WhenValueUnbounded>";
     const result = parseLocationType(foldType);
     expect(result).toBe('Tick<Cluster<Worker>>');
   });
@@ -868,7 +880,8 @@ describe('LocationAnalyzer Map-Reduce Tick Scenarios', () => {
   });
 
   test('all_ticks() should unwrap Tick and return base location', () => {
-    const allTicksType = "Stream<(String, i32), Cluster<'a, Worker>, Unbounded, NoOrder, ExactlyOnce>";
+    const allTicksType =
+      "Stream<(String, i32), Cluster<'a, Worker>, Unbounded, NoOrder, ExactlyOnce>";
     const result = parseLocationType(allTicksType);
     expect(result).toBe('Cluster<Worker>');
   });
@@ -919,7 +932,9 @@ describe('LocationAnalyzer Clone Regression Tests', () => {
     let unwrapped = fullType;
     unwrapped = unwrapped.replace(/^&(?:mut\s+)?/, '');
 
-    const collectionMatch = unwrapped.match(/^(Stream|KeyedStream|Optional|Singleton|KeyedSingleton)<(.+)>$/);
+    const collectionMatch = unwrapped.match(
+      /^(Stream|KeyedStream|Optional|Singleton|KeyedSingleton)<(.+)>$/
+    );
     if (collectionMatch) {
       const params = collectionMatch[2];
       const typeParams = parseTypeParameters(params);
@@ -997,13 +1012,14 @@ describe('LocationAnalyzer Clone Regression Tests', () => {
 
   test('Variable type extraction from declaration', () => {
     // Simulate extracting type from "r_processable_payloads: Stream<...>"
-    const declaration = "r_processable_payloads: Stream<SequencedKv<K, V>, Tick<Cluster<'a, Replica>>, Bounded>";
+    const declaration =
+      "r_processable_payloads: Stream<SequencedKv<K, V>, Tick<Cluster<'a, Replica>>, Bounded>";
     const colonMatch = declaration.match(/:\s*(.+)$/);
-    
+
     expect(colonMatch).toBeTruthy();
     const varType = colonMatch![1].trim();
     expect(varType).toBe("Stream<SequencedKv<K, V>, Tick<Cluster<'a, Replica>>, Bounded>");
-    
+
     const result = parseLocationType(varType);
     expect(result).toBe('Tick<Cluster<Replica>>');
   });
@@ -1021,7 +1037,8 @@ describe('LocationAnalyzer Clone Regression Tests', () => {
 
   test('KeyedStream with short and long forms should match', () => {
     const shortForm = "KeyedStream<K, V, Tick<Cluster<'a, Worker>>, Bounded>";
-    const longForm = "KeyedStream<K, V, Tick<Cluster<'a, Worker>>, Bounded, TotalOrder, ExactlyOnce>";
+    const longForm =
+      "KeyedStream<K, V, Tick<Cluster<'a, Worker>>, Bounded, TotalOrder, ExactlyOnce>";
 
     const shortResult = parseLocationType(shortForm);
     const longResult = parseLocationType(longForm);
@@ -1103,7 +1120,7 @@ describe('LocationAnalyzer Cache Functionality', () => {
   test('Cache should track multiple files', () => {
     // Simulate cache with multiple files
     const cache = new Map<string, { version: number; timestamp: number }>();
-    
+
     cache.set('file:///path/to/file1.rs', { version: 1, timestamp: Date.now() });
     cache.set('file:///path/to/file2.rs', { version: 2, timestamp: Date.now() });
     cache.set('file:///path/to/file3.rs', { version: 1, timestamp: Date.now() });
@@ -1114,11 +1131,11 @@ describe('LocationAnalyzer Cache Functionality', () => {
   test('Cache should handle version updates', () => {
     const cache = new Map<string, { version: number; timestamp: number }>();
     const uri = 'file:///path/to/file.rs';
-    
+
     // Initial cache entry
     cache.set(uri, { version: 1, timestamp: Date.now() });
     expect(cache.get(uri)?.version).toBe(1);
-    
+
     // Update to new version
     cache.set(uri, { version: 2, timestamp: Date.now() });
     expect(cache.get(uri)?.version).toBe(2);
@@ -1129,34 +1146,34 @@ describe('LocationAnalyzer Cache Functionality', () => {
     const cache = new Map<string, { version: number; timestamp: number }>();
     const lruOrder: string[] = [];
     const maxSize = 3;
-    
+
     // Add entries
     const files = [
       'file:///path/to/file1.rs',
       'file:///path/to/file2.rs',
       'file:///path/to/file3.rs',
     ];
-    
+
     files.forEach((uri) => {
       cache.set(uri, { version: 1, timestamp: Date.now() });
       lruOrder.push(uri);
     });
-    
+
     expect(cache.size).toBe(3);
     expect(lruOrder.length).toBe(3);
-    
+
     // Add a new entry, should evict the oldest
     const newFile = 'file:///path/to/file4.rs';
-    
+
     // Evict LRU entry if at capacity
     if (cache.size >= maxSize && lruOrder.length > 0) {
       const oldest = lruOrder.shift()!;
       cache.delete(oldest);
     }
-    
+
     cache.set(newFile, { version: 1, timestamp: Date.now() });
     lruOrder.push(newFile);
-    
+
     expect(cache.size).toBe(3);
     expect(cache.has(files[0])).toBe(false); // First file was evicted
     expect(cache.has(newFile)).toBe(true);
@@ -1165,14 +1182,14 @@ describe('LocationAnalyzer Cache Functionality', () => {
   test('Cache access should update LRU order', () => {
     const lruOrder: string[] = ['file1.rs', 'file2.rs', 'file3.rs'];
     const accessedFile = 'file1.rs';
-    
+
     // Move accessed file to end (most recently used)
     const idx = lruOrder.indexOf(accessedFile);
     if (idx >= 0) {
       lruOrder.splice(idx, 1);
     }
     lruOrder.push(accessedFile);
-    
+
     expect(lruOrder).toEqual(['file2.rs', 'file3.rs', 'file1.rs']);
     expect(lruOrder[lruOrder.length - 1]).toBe(accessedFile);
   });
@@ -1180,14 +1197,14 @@ describe('LocationAnalyzer Cache Functionality', () => {
   test('Cache should distinguish between different document versions', () => {
     const cache = new Map<string, { version: number }>();
     const uri = 'file:///path/to/file.rs';
-    
+
     // Cache version 1
     cache.set(uri, { version: 1 });
-    
+
     // Check if version matches (cache hit)
     const entry = cache.get(uri);
     expect(entry?.version).toBe(1);
-    
+
     // Document version changed to 2 (cache miss)
     const currentVersion = 2;
     const isHit = entry && entry.version === currentVersion;
@@ -1197,23 +1214,23 @@ describe('LocationAnalyzer Cache Functionality', () => {
   test('Cache stats should reflect cache operations', () => {
     let cacheHits = 0;
     let cacheMisses = 0;
-    
+
     // Simulate cache operations
     // First access - miss
     cacheMisses++;
-    
+
     // Second access to same file/version - hit
     cacheHits++;
-    
+
     // Access to different file - miss
     cacheMisses++;
-    
+
     // Access to first file again - hit
     cacheHits++;
-    
+
     const totalRequests = cacheHits + cacheMisses;
     const hitRate = totalRequests > 0 ? cacheHits / totalRequests : 0;
-    
+
     expect(cacheHits).toBe(2);
     expect(cacheMisses).toBe(2);
     expect(hitRate).toBe(0.5);
@@ -1224,18 +1241,18 @@ describe('LocationAnalyzer Cache Functionality', () => {
     const lruOrder: string[] = [];
     let cacheHits = 10;
     let cacheMisses = 5;
-    
+
     // Add some entries
     cache.set('file1.rs', { version: 1 });
     cache.set('file2.rs', { version: 1 });
     lruOrder.push('file1.rs', 'file2.rs');
-    
+
     // Clear cache
     cache.clear();
     lruOrder.length = 0;
     cacheHits = 0;
     cacheMisses = 0;
-    
+
     expect(cache.size).toBe(0);
     expect(lruOrder.length).toBe(0);
     expect(cacheHits).toBe(0);
@@ -1245,13 +1262,13 @@ describe('LocationAnalyzer Cache Functionality', () => {
   test('Clearing specific file should only remove that entry', () => {
     const cache = new Map<string, { version: number }>();
     const lruOrder: string[] = [];
-    
+
     // Add entries
     cache.set('file1.rs', { version: 1 });
     cache.set('file2.rs', { version: 1 });
     cache.set('file3.rs', { version: 1 });
     lruOrder.push('file1.rs', 'file2.rs', 'file3.rs');
-    
+
     // Clear specific file
     const fileToRemove = 'file2.rs';
     cache.delete(fileToRemove);
@@ -1259,7 +1276,7 @@ describe('LocationAnalyzer Cache Functionality', () => {
     if (idx >= 0) {
       lruOrder.splice(idx, 1);
     }
-    
+
     expect(cache.size).toBe(2);
     expect(cache.has('file1.rs')).toBe(true);
     expect(cache.has('file2.rs')).toBe(false);

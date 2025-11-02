@@ -376,10 +376,14 @@ export class GraphBuilder {
     );
 
     let enhancedCount = 0;
+    let noMatchCount = 0;
 
     for (const node of nodes) {
       const treeSitterPos = node.data.treeSitterPosition;
-      if (!treeSitterPos) continue;
+      if (!treeSitterPos) {
+        this.log(`Node ${node.shortLabel} has no treeSitterPosition, skipping`);
+        continue;
+      }
 
       // Try to find matching LSP location information
       let bestMatch: LocationInfo | null = null;
@@ -420,13 +424,18 @@ export class GraphBuilder {
         }
 
         enhancedCount++;
-        this.log(`Enhanced node ${node.shortLabel} with LSP info (distance: ${bestDistance})`);
+        this.log(
+          `✓ Enhanced '${node.shortLabel}' at ${treeSitterPos.line}:${treeSitterPos.column} with ${bestMatch.locationKind} (distance: ${bestDistance})`
+        );
       } else {
-        this.log(`No LSP enhancement for ${node.shortLabel} (best distance: ${bestDistance})`);
+        noMatchCount++;
+        this.log(
+          `✗ No LSP match for '${node.shortLabel}' at ${treeSitterPos.line}:${treeSitterPos.column} (best distance: ${bestDistance}, needs < 300)`
+        );
       }
     }
 
-    this.log(`Enhanced ${enhancedCount} of ${nodes.length} nodes with LSP information`);
+    this.log(`Enhanced ${enhancedCount} of ${nodes.length} nodes (${noMatchCount} had no match)`);
   }
 
   /**

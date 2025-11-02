@@ -101,11 +101,17 @@ export class OperatorRegistry {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const vscode = require('vscode');
       const config = vscode.workspace.getConfiguration('hydroIde.operators');
+
+      // Get package.json defaults to use as fallback
+      const defaults = this.getPackageJsonDefaults();
+
       return {
-        networkingOperators: (config.get('networkingOperators') as string[]) || [],
-        coreDataflowOperators: (config.get('coreDataflowOperators') as string[]) || [],
-        sinkOperators: (config.get('sinkOperators') as string[]) || [],
-        collectionTypes: (config.get('collectionTypes') as string[]) || [],
+        networkingOperators:
+          (config.get('networkingOperators') as string[]) || defaults.networkingOperators,
+        coreDataflowOperators:
+          (config.get('coreDataflowOperators') as string[]) || defaults.coreDataflowOperators,
+        sinkOperators: (config.get('sinkOperators') as string[]) || defaults.sinkOperators,
+        collectionTypes: (config.get('collectionTypes') as string[]) || defaults.collectionTypes,
       };
     } catch {
       // Fallback for unit test environment (package.json defaults)

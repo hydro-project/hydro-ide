@@ -103,11 +103,16 @@ export class TreeSitterRustParser {
     const sourceCode = document.getText();
     const tree = this.parser.parse(sourceCode);
     const bindings: VariableBindingNode[] = [];
-  const usageMap: Map<string, Array<{ line: number; column: number; funcStart?: number; funcEnd?: number }>> = new Map();
+    const usageMap: Map<
+      string,
+      Array<{ line: number; column: number; funcStart?: number; funcEnd?: number }>
+    > = new Map();
 
     this.log(`Parsing document with tree-sitter: ${document.fileName}`);
 
-    const getEnclosingFunctionRange = (node: SyntaxNode): { startLine: number; endLine: number } | undefined => {
+    const getEnclosingFunctionRange = (
+      node: SyntaxNode
+    ): { startLine: number; endLine: number } | undefined => {
       let cur: SyntaxNode | null = node;
       while (cur) {
         if (cur.type === 'function_item') {
@@ -122,7 +127,7 @@ export class TreeSitterRustParser {
     this.walkTree(tree.rootNode, (node) => {
       // Look for let_declaration nodes
       if (node.type === 'let_declaration') {
-        const fnScope = getEnclosingFunctionRange(node) ;
+        const fnScope = getEnclosingFunctionRange(node);
         const newBindings = this.extractVariableBindingsFromLet(node, document).map((b) => ({
           ...b,
           scope: fnScope,
@@ -148,7 +153,13 @@ export class TreeSitterRustParser {
       // Check if this exact binding (same name AND line) already exists to avoid duplicates
       if (!bindings.some((b) => b.varName === name && b.line === idNode.startPosition.row)) {
         const fnScope = getEnclosingFunctionRange(idNode);
-        bindings.push({ varName: name, line: idNode.startPosition.row, operators: [], usages: [], scope: fnScope });
+        bindings.push({
+          varName: name,
+          line: idNode.startPosition.row,
+          operators: [],
+          usages: [],
+          scope: fnScope,
+        });
         // this.log(`Found parameter: ${name} at line ${idNode.startPosition.row} with 0 operators`);
       }
     };
@@ -407,7 +418,12 @@ export class TreeSitterRustParser {
 
       // Value expression can be call_expression, field_expression, or reference_expression
       // (for cases like `let ticker = &server_process.tick()`)
-      if (!valueNode && (child.type === 'call_expression' || child.type === 'field_expression' || child.type === 'reference_expression')) {
+      if (
+        !valueNode &&
+        (child.type === 'call_expression' ||
+          child.type === 'field_expression' ||
+          child.type === 'reference_expression')
+      ) {
         valueNode = child;
       }
     }
@@ -498,8 +514,13 @@ export class TreeSitterRustParser {
     // If this is a let_declaration, find the value expression first
     if (node.type === 'let_declaration') {
       // Find the call_expression that represents the value being assigned
-      let valueNode: SyntaxNode | undefined = node.children.find((child: SyntaxNode) =>
-        child.type === 'call_expression' || child.type === 'field_expression' || child.type === 'parenthesized_expression' || child.type === 'reference_expression' || child.type === 'unary_expression'
+      let valueNode: SyntaxNode | undefined = node.children.find(
+        (child: SyntaxNode) =>
+          child.type === 'call_expression' ||
+          child.type === 'field_expression' ||
+          child.type === 'parenthesized_expression' ||
+          child.type === 'reference_expression' ||
+          child.type === 'unary_expression'
       );
       // If not found directly, try to locate the expression after '=' heuristically
       if (!valueNode) {
@@ -560,8 +581,8 @@ export class TreeSitterRustParser {
     if (node.type === 'call_expression') {
       // This is a method call - extract from the method part and check for tick arguments
       // Debug: log all children to see structure
-      this.log(`    call_expression children: ${node.children.map(c => c.type).join(', ')}`);
-      
+      this.log(`    call_expression children: ${node.children.map((c) => c.type).join(', ')}`);
+
       const method = node.children.find((child: SyntaxNode) => child.type === 'field_expression');
       this.log(`    Found method child: ${method ? method.type : 'none'}`);
       if (method) {

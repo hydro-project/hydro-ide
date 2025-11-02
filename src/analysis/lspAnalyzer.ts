@@ -327,12 +327,23 @@ export class LSPAnalyzer {
         }
 
         // Parse location type if present
-        const locationKind = this.parseLocationType(typeString);
+        let locationKind = this.parseLocationType(typeString);
 
         // Special-case: Some methods like `inspect` and `clone` return Self; inherit prior chain kind
         if (!locationKind && /^&?Self\b/.test(typeString)) {
           if (addInheritedLocation('Self return type')) {
             continue;
+          }
+        }
+        if (!locationKind) {
+          // Fallback: try to infer abstract Location from generic constraints in hover
+          // Example: return type contains `L` or `Tick<L>` and hover shows `where ... L: Location<'a>, ...`
+          const fullHover = await this.getFullHoverContent(document, position, timeout);
+          if (fullHover) {
+            const abstractLoc = this.inferAbstractLocationFromGenerics(typeString, fullHover);
+            if (abstractLoc) {
+              locationKind = abstractLoc;
+            }
           }
         }
         if (locationKind) {
@@ -376,6 +387,78 @@ export class LSPAnalyzer {
   }
 
   /**
+   * Infer an abstract Location from generic bounds in hover content when concrete instantiation is missing.
+   *
+   * Examples:
+   * - typeString: "Stream<_, L, _>" with hover where-clause containing "L: Location<'a>" -> "Location"
+   * - typeString: "Stream<_, Tick<L>, _>" with same bound -> "Tick<Location>"
+   * - typeString: "KeyedStream<_, _, Tick<Tick<L>>, _>" -> "Tick<Tick<Location>>"
+   */
+  private inferAbstractLocationFromGenerics(typeString: string, hoverContent: string): string | null {
+    try {
+      // Fast check: do we even reference a single-letter generic that could be location?
+      // Commonly 'L', but support any single-capital like 'Loc' or 'L0' as well.
+      const genericCandidates = new Set<string>();
+
+      // From Hydro collection types, extract the location parameter text (may be L or Tick<L>)
+      const collectionMatch = typeString.match(
+        /^(Stream|KeyedStream|Optional|Singleton|KeyedSingleton)<(.+)>$/
+      );
+
+      let locationParam: string | null = null;
+      if (collectionMatch) {
+        const params = collectionMatch[2];
+        const parts = this.parseTypeParameters(params);
+        const locIdx = collectionMatch[1].startsWith('Keyed') ? 2 : 1;
+        if (parts.length > locIdx) {
+          locationParam = parts[locIdx].trim();
+        }
+      } else {
+        // Could be already a Tick<L> or plain L
+        locationParam = typeString;
+      }
+
+      if (!locationParam) return null;
+
+      // Unwrap nested Tick<...> to count wrappers
+      const tickWrappers: string[] = [];
+      let inner = locationParam;
+      let m = inner.match(/^Tick<(.+)>$/);
+      while (m) {
+        tickWrappers.push('Tick');
+        inner = m[1];
+        m = inner.match(/^Tick<(.+)>$/);
+      }
+
+      // The innermost should be a generic like 'L' to qualify for abstract inference
+      const genericMatch = inner.match(/^([A-Z][A-Za-z0-9_]*)$/);
+      if (!genericMatch) return null;
+      const genericName = genericMatch[1];
+      genericCandidates.add(genericName);
+
+      // Check hover content for a where-bound indicating this generic implements Location
+      // We accept both formatted code blocks and plaintext; match loosely.
+      const hasLocationBound = new RegExp(
+        `\\b${genericName}\\b\\s*:\\s*Location\\b`
+      ).test(hoverContent);
+      if (!hasLocationBound) return null;
+
+      // Re-wrap with the same number of Tick<> layers
+      let result = 'Location';
+      for (let i = tickWrappers.length - 1; i >= 0; i--) {
+        result = `Tick<${result}>`;
+      }
+
+      this.log(
+        `  ✓ Inferred abstract location '${result}' from generics (type='${typeString}', bound='${genericName}: Location')`
+      );
+      return result;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Heuristic: For a method call at operatorPosition (e.g., `ops.filter`),
    * find the receiver identifier position (e.g., the 'ops' token) on the same line
    * so we can hover it and derive the location when the method returns `Self`.
@@ -392,7 +475,7 @@ export class LSPAnalyzer {
       if (opCol <= 0) return null;
 
       // Look for the dot immediately preceding the operator name on this line
-  const dotIdx = opLineText.lastIndexOf('.', opCol - 1);
+      const dotIdx = opLineText.lastIndexOf('.', opCol - 1);
       if (dotIdx <= 0) {
         // If not found, nothing we can do
         return null;
@@ -494,7 +577,10 @@ export class LSPAnalyzer {
           if (varIdx >= 0) {
             const varStart = varIdx;
             const varEnd = varIdx + binding.variableName.length;
-            const varPos = new vscode.Position(binding.line, varStart + Math.floor(binding.variableName.length / 2));
+            const varPos = new vscode.Position(
+              binding.line,
+              varStart + Math.floor(binding.variableName.length / 2)
+            );
             try {
               const typeString = await this.getTypeFromHover(document, varPos, false);
               if (typeString) {
@@ -523,7 +609,10 @@ export class LSPAnalyzer {
             if (!locationKind && binding.usages && binding.usages.length > 0) {
               const u = binding.usages[0];
               try {
-                const usagePos = new vscode.Position(u.line, u.column + Math.floor(binding.variableName.length / 2));
+                const usagePos = new vscode.Position(
+                  u.line,
+                  u.column + Math.floor(binding.variableName.length / 2)
+                );
                 const usageType = await this.getTypeFromHover(document, usagePos, false);
                 const usageLoc = usageType ? this.parseLocationType(usageType) : null;
                 if (usageType && usageLoc) {
@@ -592,7 +681,10 @@ export class LSPAnalyzer {
               if (binding.usages && binding.usages.length > 0) {
                 const u = binding.usages[0];
                 try {
-                  const usagePos = new vscode.Position(u.line, u.column + Math.floor(binding.variableName.length / 2));
+                  const usagePos = new vscode.Position(
+                    u.line,
+                    u.column + Math.floor(binding.variableName.length / 2)
+                  );
                   const usageType = await this.getTypeFromHover(document, usagePos, false);
                   const usageLoc = usageType ? this.parseLocationType(usageType) : null;
                   if (usageType && usageLoc) {
